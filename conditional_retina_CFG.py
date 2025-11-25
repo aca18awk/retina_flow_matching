@@ -12,6 +12,7 @@ from torchdyn.core import NeuralODE
 from retina_dataset import GlaucomaHarvardDataset
 from torch.utils.data import DataLoader
 import wandb
+import numpy as np
 
 # --- Configuration ---
 savedir = "models/cond_retina" 
@@ -22,7 +23,7 @@ device = torch.device("cuda" if use_cuda else "cpu")
 batch_size = 32
 n_epochs = 200
 IMG_SIZE = 128
-NUM_CLASSES = 3
+NUM_CLASSES = 4
 NO_OF_CHANNELS_IMG = 3
 VALIDATION_SEED = 42 
 MAX_PLATEAU = 200
@@ -45,7 +46,8 @@ logger = wandb.init(
         "lr": 1e-4,
         "channel_mult":CHANNEL_MULT, 
         "attention_resolutions":ATTENTION_RESOLUTIONS,
-        "data augmentation": TRAIN_AUGMENTATION
+        "data augmentation": "geometric only",
+        "classifier free guidance": True
     },
     resume="allow",
 )
@@ -110,7 +112,8 @@ for epoch in range(n_epochs):
     for i, data in enumerate(train_loader):
         optimizer.zero_grad()
         x1 = data[0].to(device)
-        label = data[1].to(device)
+        real_label = data[1].to(device)
+        label = real_label if np.random.random() > 0.1 else torch.full_like(real_label, fill_value=3)
         x0 = torch.randn_like(x1)
 
         t, xt, ut = FM.sample_location_and_conditional_flow(x0, x1)
@@ -177,27 +180,30 @@ if best_model is not None:
     print(f"Model saved to {save_path}")
 
 
-USE_TORCH_DIFFEQ = True
 n_samples_per_class = 10
-total_samples = NUM_CLASSES * n_samples_per_class 
-generated_class_list = torch.arange(NUM_CLASSES, device=device).repeat_interleave(n_samples_per_class)
+total_samples = (NUM_CLASSES -1) * n_samples_per_class 
+generated_class_list = torch.arange((NUM_CLASSES -1), device=device).repeat_interleave(n_samples_per_class)
+no_label_list = torch.full_like(generated_class_list, fill_value=3)
+GUIDANCE_SCALE = 5
+
+def guided_vector_field(t, x):
+    t_vector = torch.full((x.shape[0],), fill_value=t, device=x.device)
+    v_cond = model.forward(t_vector, x, generated_class_list)
+    v_uncond = model.forward(t_vector, x, no_label_list)
+    v_final = v_uncond + GUIDANCE_SCALE * (v_cond - v_uncond)
+    return v_final
+
 
 model.eval()
 with torch.no_grad():
     x0_noise = torch.randn(total_samples, NO_OF_CHANNELS_IMG, IMG_SIZE, IMG_SIZE, device=device)
-    if USE_TORCH_DIFFEQ:
-        traj = torchdiffeq.odeint(
-            lambda t, x: model.forward(t, x, generated_class_list),
+    traj = torchdiffeq.odeint(
+            lambda t, x: guided_vector_field(t, x),
             x0_noise,
             torch.linspace(0, 1, 2, device=device),
             atol=1e-5, 
             rtol=1e-5,
             method="dopri5",
-        )
-    else:
-        traj = node.trajectory(
-            x0_noise,
-            t_span=torch.linspace(0, 1, 2, device=device),
         )
 
 final_images = traj[-1].view([-1, NO_OF_CHANNELS_IMG, IMG_SIZE, IMG_SIZE])

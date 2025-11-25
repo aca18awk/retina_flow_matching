@@ -3,7 +3,7 @@ import os
 from typing import Literal
 from enum import Enum
 
-from torch import unsqueeze, from_numpy, empty
+from torch import unsqueeze, from_numpy, empty, Tensor
 from torch.utils.data import Dataset, ConcatDataset
 from torchvision.datasets import ImageFolder
 from torchvision import transforms
@@ -14,7 +14,7 @@ import numpy as np
 import numbers
 import matplotlib.pyplot as plt
 from torchvision.utils import save_image
-
+from collections import Counter
 
 DatasetSplit = Literal["test", "train", "validation"]
 
@@ -90,18 +90,20 @@ transform_pipe = transforms.Compose([
 ])
 
 class GlaucomaHarvardDataset(Dataset):
-    def __init__(self, purpose:DatasetSplit = "test", transform = None, augmentation = True, gen_data_path=None):
-        data_path = os.path.join(path,purpose)
+    def __init__(self, purpose: DatasetSplit = "test", transform=None, augmentation=True, gen_data_path=None):
+        data_path = os.path.join(path, purpose)
         real_data = ImageFolder(data_path, transform=transform)
+        
         self._classes = real_data.classes
         self._class_to_idx = real_data.class_to_idx
         self.do_augment = augmentation
         
         data = [real_data]
-        if gen_data_path == None:
+        
+        if gen_data_path is None:
             self.data = real_data
         else:
-            generated_data = ImageFolder(data_path, transform=transform)
+            generated_data = ImageFolder(gen_data_path, transform=transform) 
             data.append(generated_data)
             self.data = ConcatDataset(data)
 
@@ -115,30 +117,33 @@ class GlaucomaHarvardDataset(Dataset):
 
         # geometric data augmentation
         self.geometric_augment = T.Compose([
-            T.RandomApply(transforms=[T.RandomPerspective(distortion_scale=0.2)], p=0.5),
-            T.RandomApply(transforms=[T.RandomAffine(degrees=(-30,30), scale=(0.8, 1.2))], p=0.5),
+            # T.RandomApply(transforms=[T.RandomPerspective(distortion_scale=0.2)], p=0.5),
+            T.RandomApply(transforms=[T.RandomAffine(degrees=(-30,30), scale=(1.15, 1.5))], p=0.7),
             # T.RandomApply(transforms=[T.RandomResizedCrop(scale=(0.8, 1.0), size=image_size)], p=0.5),
         ])
 
         # --- Processing Transforms ---
-        # (Applied after augmentations, to convert PIL to normalized Tensor)
         self.processing_normalize = T.Compose([
             T.ToTensor(),
             T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])
         
-
     def __len__(self):
         return len(self.data)
     
     def __getitem__(self, index):
-        if (not self.do_augment):
+        if not self.do_augment:
             return self.data[index]
         else:
             image, label = self.data[index]
-            image = self.photometric_augment(image)
+            
+            # Apply Augmentations
+            # image = self.photometric_augment(image) # Uncomment if needed
             image = self.geometric_augment(image)
-            image = T.ToTensor()(image)
+            
+            if not isinstance(image, Tensor):
+                 image = T.ToTensor()(image)
+                 
             image = self.processing_normalize(image)
             return (image, label)
     
@@ -149,73 +154,49 @@ class GlaucomaHarvardDataset(Dataset):
     @property
     def id_to_classes(self):
         return {v: k for k, v in self._class_to_idx.items()}
-    
 
+    def len_per_class(self):
+        """
+        Returns a dictionary with the count of samples per class.
+        Handles both single ImageFolder and ConcatDataset.
+        """
+        all_targets = []
+
+        # Case 1: self.data is a ConcatDataset (Real + Generated)
+        if isinstance(self.data, ConcatDataset):
+            for ds in self.data.datasets:
+                if hasattr(ds, 'targets'):
+                    all_targets.extend(ds.targets)
+        
+        # Case 2: self.data is a single ImageFolder (Real only)
+        elif hasattr(self.data, 'targets'):
+            all_targets.extend(self.data.targets)
+
+        # Count occurrences of each class index
+        counts = Counter(all_targets)
+
+        # Map class indices to class names
+        class_counts = {
+            self.id_to_classes[idx]: count 
+            for idx, count in counts.items()
+        }
+        
+        # Ensure all classes are present (even if count is 0)
+        for class_name in self.classes:
+            if class_name not in class_counts:
+                class_counts[class_name] = 0
+
+        return class_counts
+    
 transform = transforms.Compose([
     transforms.Resize([128, 128]),
     transforms.ToTensor()
 ])
+
+
 dataset1 = GlaucomaHarvardDataset("train", transform=transform)
-print(dataset1.__len__())
-dataset1.classes
-dataset1.id_to_classes
-
-
-image, label = dataset1.__getitem__(0)
-print(image.shape)
-# Save the image to a file
-save_image(image, "output.png")
-
-
-# MORE MANUAL DEFINITION
-class GlaucomaHarvardDatasetOld(Dataset):
-    """
-    Dataset class needs to have those 3 methods overwritten
-    init - what to do when dataset is created
-    len - model needs to know how big is the dataset
-    getitem - to get specific item by using an id
-    """
-    
-    def __init__(self, purpose:DatasetSplit = "test", transform=transform_pipe):
-
-        dataPath = os.path.join(path,purpose)
-
-        files = []
-        labels = []
-        for datasetClass in DatasetClass: 
-            folderPath = os.path.join(dataPath, datasetClass.name)
-
-            newfiles = [os.path.join(folderPath, filename) for filename in os.listdir(folderPath) if filename.endswith(".png")]
-            files += newfiles
-            labels += [datasetClass.value] * len(newfiles)
-        
-        self.images = files
-        self.labels = labels
-            
-        self.transform = transform
-        
-    def __getitem__(self, idx):
-        img_path = self.images[idx]
-
-        img = imread(img_path)
-        
-        if self.transform:
-            img = self.transform(img)
-            img = unsqueeze(img, 0)
-        
-        sample = {
-            "image": img,
-            "label": self.labels[idx],
-            "id": os.path.basename(self.images[idx]).replace(".png", "")
-        }
-
-        return sample
-    
-    def __len__(self):
-        return len(self.images)
-
-
-
-# dataset = GlaucomaHarvardDataset("test")
-# dataset.__getitem__(1)
-# dataset.__len__()
+print(len(dataset1))
+# dataset1.classes
+print(dataset1.id_to_classes)
+counts = dataset1.len_per_class()
+print("Counts per class:", counts)
