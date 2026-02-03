@@ -1,8 +1,6 @@
 import os
-
 from typing import Literal
 from enum import Enum
-
 from torch import unsqueeze, from_numpy, empty, Tensor
 from torch.utils.data import Dataset, ConcatDataset
 from torchvision.datasets import ImageFolder
@@ -12,8 +10,8 @@ import torchvision.transforms.v2 as T
 import torchvision.transforms.functional as TF
 import numpy as np
 import numbers
-import matplotlib.pyplot as plt
-from torchvision.utils import save_image
+import cv2
+from PIL import Image
 from collections import Counter
 
 DatasetSplit = Literal["test", "train", "validation"]
@@ -25,14 +23,6 @@ class DatasetClass(Enum):
 
 path = '/vol/biomedic3/awk24/datasets/Glaucoma_fundus/'
 
-AI_gen = '/vol/biomedic3/awk24/datasets/Glaucoma_fundus/generated/2025/Nov_3_conditional_model/with_classifer_10'
-
-# torch randaugment - do standard augmentations
-#  colour, spatial rotations, not crazy rotations
-# track macro AUC in torch metrics 
-# early stopping based on AUC - save the best model based on that
-# H-VAE, different diffusion models
-# (common diffusion model, Flow matching model)
 
 class GammaCorrectionTransform:
     """Apply Gamma Correction to the image"""
@@ -70,82 +60,102 @@ class GammaCorrectionTransform:
             img = TF.adjust_gamma(img, gamma_factor, gain=1)
         return img
 
+# --- 1. NEW: CLAHE Transform to make veins pop ---
+class CLAHE_Transform:
+    """Applies Contrast Limited Adaptive Histogram Equalization to the L-channel"""
+    def __init__(self, clip_limit=2.0, tile_grid_size=(8, 8)):
+        self.clip_limit = clip_limit
+        self.tile_grid_size = tile_grid_size
 
+    def __call__(self, img):
+        if not isinstance(img, np.ndarray):
+            img = np.array(img)
+            
+        # Check if grayscale or RGB
+        if len(img.shape) == 2:
+            # Grayscale - apply directly
+            clahe = cv2.createCLAHE(clipLimit=self.clip_limit, tileGridSize=self.tile_grid_size)
+            final = clahe.apply(img)
+            return Image.fromarray(final)
+            
+        # RGB - Convert to LAB, apply to L channel
+        lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=self.clip_limit, tileGridSize=self.tile_grid_size)
+        cl = clahe.apply(l)
+        limg = cv2.merge((cl, a, b))
+        final = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
+        return Image.fromarray(final)
 
-transform_pipe = transforms.Compose([
-    transforms.ToPILImage(), # Convert np array to PILImage
-    
-    # Resize image to 224 x 224 as required by most vision models
-    transforms.Resize(
-        size=(224, 224)
-    ),
-    
-    # Convert PIL image to tensor with image values in [0, 1]
-    transforms.ToTensor(),
-    
-    # transforms.Normalize(
-    #     mean=[0.485, 0.456, 0.406],
-    #     std=[0.229, 0.224, 0.225]
-    # ),
-])
-
+# --- 2. Dataset Class ---
 class GlaucomaHarvardDataset(Dataset):
     def __init__(self, purpose: DatasetSplit = "test", transform=None, augmentation=True, gen_data_path=None):
         data_path = os.path.join(path, purpose)
-        real_data = ImageFolder(data_path, transform=transform)
+        
+        # We Initialize ImageFolder WITHOUT transform here to keep raw PIL images
+        # We will apply transforms manually in __getitem__
+        real_data = ImageFolder(data_path, transform=None)
         
         self._classes = real_data.classes
         self._class_to_idx = real_data.class_to_idx
         self.do_augment = augmentation
         
         data = [real_data]
-        
-        if gen_data_path is None:
-            self.data = real_data
-        else:
-            generated_data = ImageFolder(gen_data_path, transform=transform) 
+        if gen_data_path:
+            generated_data = ImageFolder(gen_data_path, transform=None) 
             data.append(generated_data)
             self.data = ConcatDataset(data)
+        else:
+            self.data = real_data
 
-        # photometric data augmentation
-        self.photometric_augment = T.Compose([
-            T.RandomApply(transforms=[GammaCorrectionTransform(gamma=0.3)], p=0.5),
-            T.RandomApply(transforms=[T.ColorJitter(brightness=0.3, contrast=0.3)], p=0.5),
-            T.RandomAdjustSharpness(sharpness_factor=0.0, p=0.5),
-            T.RandomAdjustSharpness(sharpness_factor=2.0, p=0.5),
+        # --- PIPELINE DEFINITIONS ---
+        
+        # 1. Base Preprocessing (Always applied)
+        # CLAHE must happen on PIL images before ToTensor
+        self.pre_process = transforms.Compose([
+            transforms.Resize([128, 128]),
+            CLAHE_Transform(clip_limit=1.5),
         ])
 
-        # geometric data augmentation
-        self.geometric_augment = T.Compose([
-            # T.RandomApply(transforms=[T.RandomPerspective(distortion_scale=0.2)], p=0.5),
-            T.RandomApply(transforms=[T.RandomAffine(degrees=(-30,30), scale=(1.15, 1.5))], p=0.7),
-            # T.RandomApply(transforms=[T.RandomResizedCrop(scale=(0.8, 1.0), size=image_size)], p=0.5),
+        self.train_augment = transforms.Compose([
+            # transforms.RandomHorizontalFlip(p=0.5),
+            # transforms.RandomVerticalFlip(p=0.5),
+            # transforms.RandomApply([GammaCorrectionTransform(gamma=0.3)], p=0.5),
+            # transforms.ColorJitter(brightness=0.1, contrast=0.1),
+            transforms.RandomApply([
+                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.2, hue=0.02)
+            ], p=0.8),
+            transforms.RandomApply([transforms.RandomAffine(
+                degrees=15,          
+                scale=(1.12, 1.2),
+                shear=0,
+            )],p=0.5),
         ])
 
-        # --- Processing Transforms ---
-        self.processing_normalize = T.Compose([
-            T.ToTensor(),
-            T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        # 3. Final Conversion (Tensor + Normalize)
+        self.to_tensor_norm = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])
         
     def __len__(self):
         return len(self.data)
     
     def __getitem__(self, index):
-        if not self.do_augment:
-            return self.data[index]
-        else:
-            image, label = self.data[index]
+        # Get raw PIL image and label
+        image, label = self.data[index]
+        
+        # 1. Apply Resize & CLAHE (Crucial for veins)
+        image = self.pre_process(image)
+        
+        # 2. Apply Augmentations (Only if training)
+        if self.do_augment:
+            image = self.train_augment(image)
             
-            # Apply Augmentations
-            # image = self.photometric_augment(image) # Uncomment if needed
-            image = self.geometric_augment(image)
+        # 3. Convert to Tensor and Normalize [-1, 1]
+        image = self.to_tensor_norm(image)
             
-            if not isinstance(image, Tensor):
-                 image = T.ToTensor()(image)
-                 
-            image = self.processing_normalize(image)
-            return (image, label)
+        return (image, label)
     
     @property
     def classes(self):
@@ -156,47 +166,96 @@ class GlaucomaHarvardDataset(Dataset):
         return {v: k for k, v in self._class_to_idx.items()}
 
     def len_per_class(self):
-        """
-        Returns a dictionary with the count of samples per class.
-        Handles both single ImageFolder and ConcatDataset.
-        """
+        """Returns a dictionary with the count of samples per class."""
         all_targets = []
-
-        # Case 1: self.data is a ConcatDataset (Real + Generated)
         if isinstance(self.data, ConcatDataset):
             for ds in self.data.datasets:
                 if hasattr(ds, 'targets'):
                     all_targets.extend(ds.targets)
-        
-        # Case 2: self.data is a single ImageFolder (Real only)
         elif hasattr(self.data, 'targets'):
             all_targets.extend(self.data.targets)
 
-        # Count occurrences of each class index
         counts = Counter(all_targets)
-
-        # Map class indices to class names
-        class_counts = {
-            self.id_to_classes[idx]: count 
-            for idx, count in counts.items()
-        }
-        
-        # Ensure all classes are present (even if count is 0)
+        class_counts = {self.id_to_classes[idx]: count for idx, count in counts.items()}
         for class_name in self.classes:
             if class_name not in class_counts:
                 class_counts[class_name] = 0
-
         return class_counts
     
-transform = transforms.Compose([
-    transforms.Resize([128, 128]),
-    transforms.ToTensor()
-])
 
 
-dataset1 = GlaucomaHarvardDataset("train", transform=transform)
-print(len(dataset1))
-# dataset1.classes
-print(dataset1.id_to_classes)
-counts = dataset1.len_per_class()
-print("Counts per class:", counts)
+import os
+import torch
+from torchvision.utils import save_image
+from collections import defaultdict
+import math
+
+# --- Configuration ---
+SAVE_DIR = "preview_augmentations_final"
+SAMPLES_PER_CLASS = 3
+
+def unnormalize(tensor):
+    """Reverts the (0.5, 0.5, 0.5) normalization to [0, 1] for saving."""
+    return tensor * 0.5 + 0.5
+
+if __name__ == "__main__":
+    # 1. Instantiate the dataset
+    print("Initializing dataset...")
+    dataset = GlaucomaHarvardDataset("train", augmentation=True)
+
+    # 2. Print Dataset Statistics
+    print(f"\nTotal images: {len(dataset)}")
+    counts = dataset.len_per_class()
+    print("Counts per class:", counts)
+    
+    # 3. Create output directories
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    id_to_class = dataset.id_to_classes
+    
+    for class_name in counts.keys():
+        os.makedirs(os.path.join(SAVE_DIR, class_name), exist_ok=True)
+
+    # 4. Iterate Sequentially (No Shuffling)
+    print(f"\nSaving first {SAMPLES_PER_CLASS} samples per class to '{SAVE_DIR}'...")
+    
+    samples_saved = defaultdict(int)
+    classes_needed = set(counts.keys())
+
+    # Loop through the dataset in order (0, 1, 2...)
+    # This matches the alphabetical order of files in your folders
+    for idx in range(len(dataset)):
+        # Optimization: Stop if we have enough of all classes
+        if not classes_needed:
+            break
+
+        img_tensor, label_idx = dataset[idx]
+        class_name = id_to_class[label_idx]
+
+        # Only save if we haven't reached the limit for this class
+        if samples_saved[class_name] < SAMPLES_PER_CLASS:
+            
+            # Helper to find original filename (Works if data is ImageFolder)
+            original_name = "unknown"
+            if hasattr(dataset, 'data') and hasattr(dataset.data, 'samples'):
+                # dataset.data.samples is a list of (path, class_index)
+                full_path = dataset.data.samples[idx][0]
+                original_name = os.path.basename(full_path)
+
+            # Un-normalize back to [0,1] range
+            img_visible = unnormalize(img_tensor)
+            
+            # Save file
+            filename = f"{class_name}_{samples_saved[class_name]}.png"
+            save_path = os.path.join(SAVE_DIR, class_name, filename)
+            save_image(img_visible, save_path)
+            
+            print(f"[{class_name}] Saved {filename} (Source: {original_name})")
+            
+            samples_saved[class_name] += 1
+            
+            # Check if we are done with this class
+            if samples_saved[class_name] >= SAMPLES_PER_CLASS:
+                if class_name in classes_needed:
+                    classes_needed.remove(class_name)
+
+    print("\nDone! Images saved.")
