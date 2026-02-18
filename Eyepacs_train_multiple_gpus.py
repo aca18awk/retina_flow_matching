@@ -1,5 +1,6 @@
 import copy
 import os
+import time
 
 import numpy as np
 import torch
@@ -7,6 +8,8 @@ import torch.nn as nn
 import wandb
 from Eyepacs_class import EyepacsDataset
 from Eyepacs_generate_images import generate_images
+from torch.cuda.amp.autocast_mode import autocast
+from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn.utils import clip_grad_norm_  # type: ignore
 from torch.utils.data import DataLoader
 
@@ -14,7 +17,7 @@ from torchcfm.conditional_flow_matching import TargetConditionalFlowMatcher
 from torchcfm.models.unet import UNetModel
 
 # --- Configuration ---
-savedir = "models/17_Feb_Eyepacs_multiple_GPUs"
+savedir = "models/18_Feb_Eyepacs_multiple_GPUs"
 os.makedirs(savedir, exist_ok=True)
 figs_dir = os.path.join(savedir, "figs")
 os.makedirs(figs_dir, exist_ok=True)
@@ -26,8 +29,8 @@ GUIDANCE_SCALE = 3.0
 
 # training params
 N_EPOCHS = 500
-BATCH_SIZE = 128
-MAX_PLATEAU = 100
+BATCH_SIZE = 126
+MAX_PLATEAU = 50
 LEARNING_RATE = 0.0001
 K_NEIGHBORS = 2  # The FSFM "k"
 IMG_SIZE = 128
@@ -54,16 +57,58 @@ logger = wandb.init(
 )
 run_name = logger.name or "FSFM_Run"
 
-train_dataset = EyepacsDataset(purpose="train", img_size=IMG_SIZE, k_neighbours=K_NEIGHBORS)
 
-train_loader = DataLoader(
-    train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True
+# Define source and local target
+source_dir = "/vol/biomedic3/awk24/datasets/EYEPACS_256"
+# Use environment variable for cluster scratch if available, else /tmp
+local_scratch = os.environ.get("TMPDIR", "/tmp")
+dataset_loc = os.path.join(local_scratch, "EYEPACS_256")
+
+# We remove the directory if it exists to ensure no partial/corrupted data remains
+if os.path.exists(dataset_loc):
+    print("data already copied")
+    # print(f"Cleaning up existing data at {dataset_loc}...")
+    # shutil.rmtree(dataset_loc)
+else:
+    print(f"Copying data from {source_dir} to {dataset_loc}...")
+    start_time = time.time()
+
+    # Option B: Copying the pre-processed 256px folder
+    # This should now take < 30 seconds since we've shrunk the dataset!
+    os.system(f"cp -r {source_dir} {local_scratch}")
+
+    print(f"Data copied in {time.time() - start_time:.2f}s")
+
+# UPDATE YOUR DATASET INIT TO USE THE LOCAL PATH
+train_dataset = EyepacsDataset(
+    root=dataset_loc,
+    purpose="train",
+    img_size=IMG_SIZE,
+    k_neighbours=K_NEIGHBORS,
 )
 
-val_dataset = EyepacsDataset(purpose="validation", img_size=IMG_SIZE, k_neighbours=K_NEIGHBORS)
+# train_dataset = EyepacsDataset(purpose="train", img_size=IMG_SIZE, k_neighbours=K_NEIGHBORS)
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=8,
+    pin_memory=True,
+    persistent_workers=True,
+)
+
+val_dataset = EyepacsDataset(
+    root=dataset_loc, purpose="validation", img_size=IMG_SIZE, k_neighbours=K_NEIGHBORS
+)
 
 val_loader = DataLoader(
-    val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True
+    val_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    num_workers=8,
+    pin_memory=True,
+    persistent_workers=True,
 )
 
 # --- FSFM: 2. Model Initialization & Monkey-Patching ---
@@ -94,6 +139,7 @@ if torch.cuda.device_count() > 1:
     model = nn.DataParallel(model)  # type: ignore
 
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+scaler = GradScaler()  # <--- 2. Initialize GradScaler
 FM = TargetConditionalFlowMatcher(sigma=0.0)
 
 # --- Training State ---
@@ -109,7 +155,7 @@ for epoch in range(N_EPOCHS):
 
     train_avg_loss = []
     for i, data in enumerate(train_loader):
-        print(">>> i")
+        print(">>>", i)
         optimizer.zero_grad()
         x1 = data[0].to(device)
 
@@ -123,14 +169,23 @@ for epoch in range(N_EPOCHS):
         # Standard Flow Matching
         x0 = torch.randn_like(x1)
 
-        t, xt, ut, *_ = FM.sample_location_and_conditional_flow(x0, x1)
-        vt = model(t, xt, label)
-        loss = torch.mean((vt - ut) ** 2)
+        # <--- 3. Wrap Forward Pass in autocast
+        with autocast():
+            t, xt, ut, *_ = FM.sample_location_and_conditional_flow(x0, x1)
+            vt = model(t, xt, label)
+            loss = torch.mean((vt - ut) ** 2)
 
         train_avg_loss.append(loss.item())
-        loss.backward()
+
+        # <--- 4. Scale Gradients & Step
+        scaler.scale(loss).backward()
+
+        # Unscale before clipping (important!)
+        scaler.unscale_(optimizer)
         clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
+
+        scaler.step(optimizer)
+        scaler.update()
 
     epoch_loss = np.mean(train_avg_loss)
 
@@ -142,9 +197,10 @@ for epoch in range(N_EPOCHS):
             y1 = data[1].to(device)
             x0 = torch.randn_like(x1)
 
-            t, xt, ut, *_ = FM.sample_location_and_conditional_flow(x0, x1)
-            vt = model(t, xt, y1)
-            loss = torch.mean((vt - ut) ** 2)
+            with autocast():
+                t, xt, ut, *_ = FM.sample_location_and_conditional_flow(x0, x1)
+                vt = model(t, xt, y1)
+                loss = torch.mean((vt - ut) ** 2)
 
             val_avg_loss.append(loss.item())
 
@@ -154,7 +210,7 @@ for epoch in range(N_EPOCHS):
     logger.log({"epoch": epoch, "val_loss": val_epoch_loss, "train_loss": epoch_loss})
 
     # --- VISUALIZATION & GENERATION CHECK ---
-    if epoch % 20 == 0:
+    if epoch % 10 == 0:
         model.eval()
         with torch.no_grad():
             eval_model = model.module if hasattr(model, "module") else model

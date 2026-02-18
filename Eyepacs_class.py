@@ -1,7 +1,8 @@
 import os
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 import numpy as np
+import torchvision.transforms.functional as TF
 import torchvision.utils as vutils
 from PIL import Image
 from torch import cat, distributions, load, ones, randperm, stack
@@ -10,52 +11,55 @@ from torchvision import transforms
 
 DatasetSplit = Literal["test", "train", "validation"]
 
-ROOT_PATH = "/vol/biomedic3/awk24/datasets/EYEPACS"
-
-import torchvision.transforms.functional as TF
+# Default fallback (only used if no root is provided)
+DEFAULT_ROOT_PATH = "/vol/biomedic3/awk24/datasets/EYEPACS_256"
 
 
 class PadToSquare:
     """
     Pads the image with black pixels to make it a perfect square.
-    Crucial for 'cut' images so they don't get squashed when resizing.
     """
 
     def __call__(self, img):
         w, h = img.size
         max_dim = max(w, h)
-
-        # Calculate padding needed to make it square
         pad_left = (max_dim - w) // 2
         pad_top = (max_dim - h) // 2
         pad_right = max_dim - w - pad_left
         pad_bottom = max_dim - h - pad_top
-
-        # Apply padding (fill=0 is black)
-        return TF.pad(img, (pad_left, pad_top, pad_right, pad_bottom), fill=0)  # type: ignore
+        return TF.pad(img, (pad_left, pad_top, pad_right, pad_bottom), fill=0)
 
 
 class CropToFundus:
     """
-    Detects the non-black content (the eye) and crops the image to that bounding box.
-    This unifies the 'zoom' level across all images.
+    OPTIMIZED: Detects the eye content on a downscaled version (thumbnail)
+    to save CPU cycles, then crops the original high-res image.
     """
 
-    def __init__(self, tolerance=10):
+    def __init__(self, tolerance=10, downscale_size=512):
         self.tolerance = tolerance
+        self.downscale_size = downscale_size
 
     def __call__(self, img):
-        # Convert PIL to Numpy
-        if not isinstance(img, np.ndarray):
-            img_np = np.array(img)
+        # 1. Work on a tiny thumbnail to find the mask fast
+        w, h = img.size
+
+        # If image is already small, just process it normally
+        if min(w, h) < self.downscale_size:
+            scale_x, scale_y = 1.0, 1.0
+            img_small = img
         else:
-            img_np = img
+            # Resize uses NEAREST for speed, we just need the black/content boundary
+            img_small = img.resize(
+                (self.downscale_size, self.downscale_size), resample=Image.NEAREST
+            )
+            scale_x = w / self.downscale_size
+            scale_y = h / self.downscale_size
 
-        # Create a mask where pixels are greater than threshold
-        # (We check all channels; if any channel > tolerance, it's part of the eye)
+        img_np = np.array(img_small)
+
+        # 2. Create Mask (on small image)
         mask = img_np > self.tolerance
-
-        # If image is almost entirely black, return original (prevents crashing)
         if img_np.ndim == 3:
             has_content = mask.any(axis=2)
         else:
@@ -64,104 +68,96 @@ class CropToFundus:
         if not has_content.any():
             return img
 
-        # Find the bounding box of the 'True' values in the mask
+        # 3. Find Bounding Box (on small image)
         rows = np.any(has_content, axis=1)
         cols = np.any(has_content, axis=0)
-
         rmin, rmax = np.where(rows)[0][[0, -1]]
         cmin, cmax = np.where(cols)[0][[0, -1]]
 
-        # Crop the image
-        cropped_img = img_np[rmin : rmax + 1, cmin : cmax + 1]
+        # 4. Scale coordinates back to original image size
+        # We add a small buffer/padding to ensure we don't cut too aggressively due to scaling
+        real_cmin = int(np.floor(cmin * scale_x))
+        real_rmin = int(np.floor(rmin * scale_y))
+        real_cmax = int(np.ceil((cmax + 1) * scale_x))
+        real_rmax = int(np.ceil((rmax + 1) * scale_y))
 
-        # Convert back to PIL
-        return Image.fromarray(cropped_img)
+        # Clamp to image boundaries
+        real_cmin = max(0, real_cmin)
+        real_rmin = max(0, real_rmin)
+        real_cmax = min(w, real_cmax)
+        real_rmax = min(h, real_rmax)
+
+        # 5. Crop the original high-res image
+        return img.crop((real_cmin, real_rmin, real_cmax, real_rmax))
 
 
 class EyepacsDataset(Dataset):
-    def __init__(self, purpose: DatasetSplit = "train", img_size=128, k_neighbours=3):
+    def __init__(
+        self,
+        root: Optional[str] = None,  # <--- NEW ARGUMENT
+        purpose: DatasetSplit = "train",
+        img_size=128,
+        k_neighbours=3,
+    ):
         self.purpose = purpose
         self.image_paths: List[str] = []
         self.k_neighbours = k_neighbours
 
         # --- 1. Path Selection Logic ---
-        # If train -> use 'train' folder
-        # If validation -> use 'test' folder (but only 2000 images)
+        # If 'root' is not passed, fall back to the global default
+        base_path = root if root is not None else DEFAULT_ROOT_PATH
+
         if purpose == "train":
             folder_name = "train"
         else:
-            folder_name = "test"
+            folder_name = "validation"
 
-        # Load Cached Data
+        data_path = os.path.join(base_path, folder_name)
+
+        # Load Cached Data (Features)
+        # Note: Ensure these .pt files are in your working directory
+        # or update the path to load them from 'base_path' if you move them too.
         if purpose == "train":
             self.features = load("Eyepacs_train_features.pt", map_location="cpu")
             self.indices = load("Eyepacs_train_indices.pt", map_location="cpu")
         else:
-            # self.features = None
-            # self.indices = None
             self.features = load("Eyepacs_val_features.pt", map_location="cpu")
             self.indices = load("Eyepacs_val_indices.pt", map_location="cpu")
 
-        data_path = os.path.join(ROOT_PATH, folder_name)
-
-        # --- 2. File Collection (Recursive walk) ---
-        # We manually walk the directory to find images.
-        # This solves the issue if 'test' is flat and 'train' is structured.
+        # --- 2. File Collection ---
         valid_extensions = {".jpg", ".jpeg", ".png"}
 
         print(f"Scanning files in {data_path}...")
-        for root, _, files in os.walk(data_path):
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(
+                f"Could not find dataset at {data_path}. Did you copy it to scratch correctly?"
+            )
+
+        for root_dir, _, files in os.walk(data_path):
             for file in files:
                 if os.path.splitext(file)[1].lower() in valid_extensions:
-                    self.image_paths.append(os.path.join(root, file))
+                    self.image_paths.append(os.path.join(root_dir, file))
 
-        # Sort to ensure reproducibility across runs
         self.image_paths.sort()
 
         # --- 3. Limit Validation Set ---
         if purpose == "validation":
-            # Only take the first 2000 images from the test folder
             limit = 2000
             if len(self.image_paths) > limit:
                 self.image_paths = self.image_paths[:limit]
-                print(f"Validation mode: Limiting to first {limit} images from {folder_name}.")
+                print(f"Validation mode: Limiting to first {limit} images.")
 
         print(f"Found {len(self.image_paths)} images for split '{purpose}'.")
 
         # --- 4. Pipeline Definitions ---
         self.pre_process = transforms.Compose(
             [
-                CropToFundus(tolerance=10),  # <--- STEP 1: Remove black borders
-                PadToSquare(),
+                # CropToFundus(tolerance=10, downscale_size=512),  # <--- Uses optimized version
+                # PadToSquare(),
                 transforms.Resize([img_size, img_size]),
-                # CLAHE_Transform(clip_limit=1.5), # Uncomment if desired
             ]
         )
 
-        # Removing augmentations since I'm pre-calculating nearest neighbours for each image before training
-        # self.train_augment = transforms.Compose(
-        #     [
-        #         transforms.RandomHorizontalFlip(p=0.5),
-        #         transforms.RandomVerticalFlip(p=0.5),
-        #         transforms.RandomApply(
-        #             [
-        #                 transforms.ColorJitter(
-        #                     brightness=0.1,  # type: ignore
-        #                     contrast=0.1,  # type: ignore
-        #                     saturation=0.1,  # type: ignore
-        #                     hue=0.01,  # type: ignore
-        #                 )
-        #             ],
-        #             p=0.8,
-        #         ),
-        #         # transforms.RandomApply(
-        #         #     [transforms.RandomAffine(degrees=15, scale=(1.12, 1.2), shear=0)],
-        #         #     p=0.5,
-        #         # ),
-        #     ]
-        # )
-
-        # Normalize to [-1, 1] for flow matching / diffusion
         self.to_tensor_norm = transforms.Compose(
             [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
         )
@@ -172,48 +168,41 @@ class EyepacsDataset(Dataset):
     def __getitem__(self, index):
         img_path = self.image_paths[index]
 
-        # Load Image (Convert to RGB to handle grayscale issues)
         try:
             image = Image.open(img_path).convert("RGB")
         except Exception as e:
             print(f"Error loading image {img_path}: {e}")
-            # Return a blank image or handle error appropriately
-            # Here we just generate a black image to prevent crashing
             image = Image.new("RGB", (128, 128))
 
-        # 1. Base Preprocessing
+        # 1. Base Preprocessing (Crop -> Pad -> Resize)
         image = self.pre_process(image)
 
-        # 3. Convert to Tensor [-1, 1]
+        # 2. Convert to Tensor
         image = self.to_tensor_norm(image)
 
-        # Dynamic Barycentric Sampling
+        # 3. Dynamic Barycentric Sampling
         if self.features is not None and self.indices is not None:
-            # 1. Get neighbors for this image
-            neighbor_idxs = self.indices[index]  # [K]
-
-            # 2. Select (K) neighbors randomly
+            neighbor_idxs = self.indices[index]
             num_neighbors_to_sample = self.k_neighbours
+
+            # Safety check for k_neighbors
+            if len(neighbor_idxs) < num_neighbors_to_sample:
+                num_neighbors_to_sample = len(neighbor_idxs)
+
             perm = randperm(len(neighbor_idxs))[:num_neighbors_to_sample]
             selected_neighbor_idxs = neighbor_idxs[perm]
 
-            # 3. Gather Features: [Self] + [Neighbors]
-            # self.features[index] is the feature of the current image
-            self_feat = self.features[index].unsqueeze(0)  # [1, 512]
-            neighbor_feats = self.features[selected_neighbor_idxs]  # [K-1, 512]
+            self_feat = self.features[index].unsqueeze(0)
+            neighbor_feats = self.features[selected_neighbor_idxs]
 
-            # Combine them to form the simplex (triangle/tetrahedron)
-            vectors = cat([self_feat, neighbor_feats], dim=0)  # [K, 512]
+            vectors = cat([self_feat, neighbor_feats], dim=0)
 
-            # 4. Sample Dirichlet weights (Barycentric coords)
-            weights = distributions.Dirichlet(ones(self.k_neighbours + 1)).sample()  # [3]
+            # Fix: Ensure Dirichlet has correct shape based on actual neighbors found
+            weights = distributions.Dirichlet(ones(len(vectors))).sample()
 
-            # 5. Weighted Average
-            condition = (vectors * weights.unsqueeze(1)).sum(dim=0)  # [512]
-
+            condition = (vectors * weights.unsqueeze(1)).sum(dim=0)
             return image, condition
 
-        # RETURN ONLY IMAGE
         return image
 
 
