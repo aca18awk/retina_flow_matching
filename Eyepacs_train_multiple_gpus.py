@@ -1,288 +1,311 @@
 import copy
 import os
-import time
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import wandb
 from Eyepacs_class import EyepacsDataset
 from Eyepacs_generate_images import generate_images
 from torch.cuda.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
-from torch.nn.utils import clip_grad_norm_  # type: ignore
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
+# Import your custom modules
 from torchcfm.conditional_flow_matching import TargetConditionalFlowMatcher
 from torchcfm.models.unet import UNetModel
 
-# --- Configuration ---
-savedir = "models/18_Feb_Eyepacs_multiple_GPUs"
-os.makedirs(savedir, exist_ok=True)
-figs_dir = os.path.join(savedir, "figs")
-os.makedirs(figs_dir, exist_ok=True)
 
-use_cuda = torch.cuda.is_available()
-device = torch.device("cuda" if use_cuda else "cpu")
-VALIDATION_SEED = 42
-GUIDANCE_SCALE = 3.0
-
-# training params
-N_EPOCHS = 500
-BATCH_SIZE = 126
-MAX_PLATEAU = 50
-LEARNING_RATE = 0.0001
-K_NEIGHBORS = 2  # The FSFM "k"
-IMG_SIZE = 128
-
-# model params
-NUM_CHANNELS_U_NET = 128
-NUM_RES_BLOCKS_U_NET = 2
-CHANNEL_MULT = (1, 2, 4, 8)  # Deep semantics: 128->256->512->1024
-ATTENTION_RESOLUTIONS = "32, 16, 8"
-NO_OF_CHANNELS_IMG = 3
+def setup():
+    dist.init_process_group("nccl")
 
 
-# --- WandB Init ---
-logger = wandb.init(
-    project="flow_matching_eyepacs",
-    config={
-        "type": "FSFM_Latent_Conditioning",
-        "k_neighbors": K_NEIGHBORS,
-        "lr": LEARNING_RATE,
-        "batch_size": BATCH_SIZE,
-        "image_size": IMG_SIZE,
-        "mixed_precision": True,
-    },
-)
-run_name = logger.name or "FSFM_Run"
+def cleanup():
+    dist.destroy_process_group()
 
 
-# Define source and local target
-source_dir = "/vol/biomedic3/awk24/datasets/EYEPACS_256"
-# Use environment variable for cluster scratch if available, else /tmp
-local_scratch = os.environ.get("TMPDIR", "/tmp")
-dataset_loc = os.path.join(local_scratch, "EYEPACS_256")
+def main():
+    setup()
 
-# We remove the directory if it exists to ensure no partial/corrupted data remains
-if os.path.exists(dataset_loc):
-    print("data already copied")
-    # print(f"Cleaning up existing data at {dataset_loc}...")
-    # shutil.rmtree(dataset_loc)
-else:
-    print(f"Copying data from {source_dir} to {dataset_loc}...")
-    start_time = time.time()
+    # 1. DDP Environment Variables (Set automatically by torchrun)
+    local_rank = int(os.environ["LOCAL_RANK"])
+    global_rank = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
 
-    # Option B: Copying the pre-processed 256px folder
-    # This should now take < 30 seconds since we've shrunk the dataset!
-    os.system(f"cp -r {source_dir} {local_scratch}")
+    torch.cuda.set_device(local_rank)
+    device = torch.device(f"cuda:{local_rank}")
 
-    print(f"Data copied in {time.time() - start_time:.2f}s")
+    # --- Configuration ---
+    savedir = "models/18_Feb_Eyepacs_DDP"
+    figs_dir = os.path.join(savedir, "figs")
 
-# UPDATE YOUR DATASET INIT TO USE THE LOCAL PATH
-train_dataset = EyepacsDataset(
-    root=dataset_loc,
-    purpose="train",
-    img_size=IMG_SIZE,
-    k_neighbours=K_NEIGHBORS,
-)
+    # Hyperparams
+    VALIDATION_SEED = 42
+    GUIDANCE_SCALE = 3.0
+    N_EPOCHS = 500
+    BATCH_SIZE = 42  # Per GPU (Total effective batch = 126 * 3 = 378)
+    LEARNING_RATE = 0.0002
+    K_NEIGHBORS = 2
+    IMG_SIZE = 128
 
-# train_dataset = EyepacsDataset(purpose="train", img_size=IMG_SIZE, k_neighbours=K_NEIGHBORS)
+    NUM_CHANNELS_U_NET = 128
+    NUM_RES_BLOCKS_U_NET = 2
+    CHANNEL_MULT = (1, 2, 4, 8)  # Deep semantics: 128->256->512->1024
+    ATTENTION_RESOLUTIONS = "32, 16, 8"
+    NO_OF_CHANNELS_IMG = 3
 
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=True,
-    num_workers=8,
-    pin_memory=True,
-    persistent_workers=True,
-)
+    # Only Rank 0 creates directories/logs
+    run_name = "FSFM_Run"
+    if global_rank == 0:
+        os.makedirs(figs_dir, exist_ok=True)
+        # WandB only on Rank 0 to prevent 3 separate runs being logged
+        logger = wandb.init(
+            project="flow_matching_eyepacs",
+            config={
+                "type": "FSFM_Latent_Conditioning",
+                "k_neighbors": K_NEIGHBORS,
+                "lr": LEARNING_RATE,
+                "batch_size": BATCH_SIZE,
+                "image_size": IMG_SIZE,
+                "mixed_precision": True,
+            },
+        )
+        run_name = logger.name or "FSFM_Run"
 
-val_dataset = EyepacsDataset(
-    root=dataset_loc, purpose="validation", img_size=IMG_SIZE, k_neighbours=K_NEIGHBORS
-)
+    # --- Data Setup ---
+    # Define paths
+    source_dir = "/vol/biomedic3/awk24/datasets/EYEPACS_256"
+    local_scratch = os.environ.get("TMPDIR", "/tmp")
+    dataset_loc = os.path.join(local_scratch, "EYEPACS_256")
 
-val_loader = DataLoader(
-    val_dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=False,
-    num_workers=8,
-    pin_memory=True,
-    persistent_workers=True,
-)
+    # Sync Barrier: Wait for Rank 0 to copy data if needed
+    if global_rank == 0:
+        if not os.path.exists(dataset_loc):
+            print(f"Rank 0: Copying data to {dataset_loc}...")
+            os.system(f"cp -r {source_dir} {local_scratch}")
+    dist.barrier()
 
-# --- FSFM: 2. Model Initialization & Monkey-Patching ---
-# We initialize with num_classes=1 just to trigger the conditional logic in the UNet
-model = UNetModel(
-    dim=(NO_OF_CHANNELS_IMG, IMG_SIZE, IMG_SIZE),
-    num_channels=NUM_CHANNELS_U_NET,
-    num_res_blocks=NUM_RES_BLOCKS_U_NET,
-    num_classes=1,
-    class_cond=True,
-    channel_mult=CHANNEL_MULT,
-    attention_resolutions=ATTENTION_RESOLUTIONS,
-).to(device)
+    # Init Dataset (This will load data into RAM on each process)
+    # Since we have 375GB RAM, loading 6GB three times (18GB) is trivial.
+    train_dataset = EyepacsDataset(
+        root=dataset_loc,
+        purpose="train",
+        img_size=IMG_SIZE,
+        k_neighbours=K_NEIGHBORS,
+    )
+    # DDP Sampler (Crucial for splitting data correctly)
+    train_sampler = DistributedSampler(train_dataset, shuffle=True)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        sampler=train_sampler,
+        num_workers=4,
+        pin_memory=True,
+    )
+    val_dataset = EyepacsDataset(
+        root=dataset_loc,
+        purpose="validation",
+        img_size=IMG_SIZE,
+        k_neighbours=K_NEIGHBORS,
+    )
+    val_sampler = DistributedSampler(val_dataset, shuffle=False)
 
-# HACK: Replace the embedding layer with a Linear Projection for our 512-dim vector
-# We check the internal dimension the UNet expects for time embeddings
-time_embed_dim = model.time_embed[-1].out_features
-model.label_emb = nn.Sequential(  # type: ignore
-    nn.Linear(512, time_embed_dim),  # type: ignore
-    nn.SiLU(),
-    nn.Linear(time_embed_dim, time_embed_dim),  # type: ignore
-).to(device)
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        sampler=val_sampler,
+        num_workers=4,
+        pin_memory=True,
+    )
 
-print(f"Model patched! Accepting 512-dim latent vectors mapped to {time_embed_dim}-dim.")
+    # --- Model Setup ---
+    # We initialize with num_classes=1 just to trigger the conditional logic in the UNet
+    model = UNetModel(
+        dim=(NO_OF_CHANNELS_IMG, IMG_SIZE, IMG_SIZE),
+        num_channels=NUM_CHANNELS_U_NET,
+        num_res_blocks=NUM_RES_BLOCKS_U_NET,
+        num_classes=1,
+        class_cond=True,
+        channel_mult=CHANNEL_MULT,
+        attention_resolutions=ATTENTION_RESOLUTIONS,
+    ).to(device)
 
-if torch.cuda.device_count() > 1:
-    print(f"Using {torch.cuda.device_count()} GPUs!")
-    model = nn.DataParallel(model)  # type: ignore
+    # HACK: Replace the embedding layer with a Linear Projection for our 512-dim vector
+    # We check the internal dimension the UNet expects for time embeddings
+    time_embed_dim = model.time_embed[-1].out_features
+    model.label_emb = nn.Sequential(  # type: ignore
+        nn.Linear(512, time_embed_dim),  # type: ignore
+        nn.SiLU(),
+        nn.Linear(time_embed_dim, time_embed_dim),  # type: ignore
+    ).to(device)
 
-optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-scaler = GradScaler()  # <--- 2. Initialize GradScaler
-FM = TargetConditionalFlowMatcher(sigma=0.0)
+    # DDP Wrapper
+    model = DDP(model, device_ids=[local_rank])
 
-# --- Training State ---
-best_loss = float("inf")
-plateau_count = 0
-best_model = None
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    scaler = GradScaler()
+    FM = TargetConditionalFlowMatcher(sigma=0.0)
 
-print(f"Starting FSFM training on {device}...")
+    best_loss = float("inf")
+    best_model = None
 
-for epoch in range(N_EPOCHS):
-    model.train()
-    print(f"Starting epoch {epoch}")
+    start_epoch = 0
+    # resume_path = os.path.join(savedir, "model_20_old.pth")  # Make sure this file exists!
 
-    train_avg_loss = []
-    for i, data in enumerate(train_loader):
-        print(">>>", i)
-        optimizer.zero_grad()
-        x1 = data[0].to(device)
+    # if os.path.exists(resume_path):
+    #     # We must use map_location to load correctly on DDP
+    #     checkpoint = torch.load(resume_path, map_location=device)
 
-        y1 = data[1].to(device)
-        mask = torch.rand(x1.shape[0], device=device) > 0.1
-        mask = mask.view(-1, 1)  # [B, 1] for broadcasting
+    #     # Handle the "module." prefix that DDP adds
+    #     # If your saved model has "module.conv..." keys, loading into model.module is redundant
+    #     # But usually, just loading the state_dict works if keys match.
+    #     try:
+    #         model.module.load_state_dict(checkpoint)
+    #     except:
+    #         # Fallback if keys don't match exactly (sometimes DDP adds/removes prefixes)
+    #         model.load_state_dict(checkpoint)
 
-        null_label = torch.zeros_like(y1)
-        label = torch.where(mask, y1, null_label)
+    #     start_epoch = 21  # Skip the first 20
+    #     print(f"[Rank {global_rank}] Resuming from Epoch 20!")
 
-        # Standard Flow Matching
-        x0 = torch.randn_like(x1)
+    # print(f"[Rank {global_rank}] Ready to train.")
 
-        # <--- 3. Wrap Forward Pass in autocast
-        with autocast():
-            t, xt, ut, *_ = FM.sample_location_and_conditional_flow(x0, x1)
-            vt = model(t, xt, label)
-            loss = torch.mean((vt - ut) ** 2)
+    for epoch in range(start_epoch, N_EPOCHS):
+        model.train()
+        train_sampler.set_epoch(epoch)  # Essential for shuffling
 
-        train_avg_loss.append(loss.item())
+        train_avg_loss = []
 
-        # <--- 4. Scale Gradients & Step
-        scaler.scale(loss).backward()
+        for i, (x1, y1) in enumerate(train_loader):
+            print(">>>>", i)
+            x1 = x1.to(device, non_blocking=True)
+            y1 = y1.to(device, non_blocking=True)
 
-        # Unscale before clipping (important!)
-        scaler.unscale_(optimizer)
-        clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.zero_grad()
 
-        scaler.step(optimizer)
-        scaler.update()
+            # Masking logic
+            mask = torch.rand(x1.shape[0], device=device) > 0.1
+            mask = mask.view(-1, 1)
 
-    epoch_loss = np.mean(train_avg_loss)
+            null_label = torch.zeros_like(y1)
+            label = torch.where(mask, y1, null_label)
 
-    model.eval()
-    val_avg_loss = []
-    with torch.no_grad():
-        for i, data in enumerate(val_loader):
-            x1 = data[0].to(device)
-            y1 = data[1].to(device)
             x0 = torch.randn_like(x1)
 
+            # Mixed Precision
             with autocast():
                 t, xt, ut, *_ = FM.sample_location_and_conditional_flow(x0, x1)
-                vt = model(t, xt, y1)
+                vt = model(t, xt, label)
                 loss = torch.mean((vt - ut) ** 2)
 
-            val_avg_loss.append(loss.item())
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
 
-    val_epoch_loss = np.mean(val_avg_loss)
+            train_avg_loss.append(loss.item())
 
-    print(f"Epoch: {epoch} | Train: {epoch_loss:.4f} | Val: {val_epoch_loss:.4f}")
-    logger.log({"epoch": epoch, "val_loss": val_epoch_loss, "train_loss": epoch_loss})
+        # This averages the loss across all 3 GPUs so WandB shows the TRUE global loss
+        local_loss = torch.tensor(np.mean(train_avg_loss), device=device)
+        dist.all_reduce(local_loss, op=dist.ReduceOp.SUM)
+        epoch_loss = local_loss.item() / world_size
 
-    # --- VISUALIZATION & GENERATION CHECK ---
-    if epoch % 10 == 0:
         model.eval()
+        val_avg_loss = []
         with torch.no_grad():
-            eval_model = model.module if hasattr(model, "module") else model
+            for i, data in enumerate(val_loader):
+                x1 = data[0].to(device)
+                y1 = data[1].to(device)
+                x0 = torch.randn_like(x1)
+
+                with autocast():
+                    t, xt, ut, *_ = FM.sample_location_and_conditional_flow(x0, x1)
+                    vt = model(t, xt, y1)
+                    loss = torch.mean((vt - ut) ** 2)
+
+                val_avg_loss.append(loss.item())
+
+        # Sync Validation Loss as well
+        local_val = torch.tensor(np.mean(val_avg_loss), device=device)
+        dist.all_reduce(local_val, op=dist.ReduceOp.SUM)
+        val_epoch_loss = local_val.item() / world_size
+
+        if global_rank == 0:
+            print(f"Epoch {epoch} | Train Loss: {epoch_loss:.4f} | Val: {val_epoch_loss:.4f}")
+            wandb.log({"epoch": epoch, "train_loss": epoch_loss, "val_loss": val_epoch_loss})
+
+            # Save Checkpoints & Generate Images
+            if epoch % 10 == 0:
+                model.eval()
+                # Access underlying model for saving
+                model_to_save = model.module
+                torch.save(model_to_save.state_dict(), os.path.join(savedir, f"model_{epoch}.pth"))
+
+                # Validation Generation
+                with torch.no_grad():
+                    generate_images(
+                        model_to_save,
+                        figs_dir,
+                        val_loader,
+                        K_NEIGHBORS,
+                        GUIDANCE_SCALE,
+                        epoch=str(epoch),
+                        seed=VALIDATION_SEED,
+                    )
+            # --- Early Stopping ---
+            if val_epoch_loss <= best_loss:
+                best_loss = val_epoch_loss
+
+                model_to_save = model.module if hasattr(model, "module") else model
+                best_model = copy.deepcopy(model_to_save.state_dict())  # type: ignore
+                print(f"  --> New Best Model! (Val Loss: {best_loss:.4f})")
+
+    print("\nTraining complete.")
+
+    if global_rank == 0:
+        eval_model = model.module if hasattr(model, "module") else model
+        generate_images(
+            eval_model,
+            figs_dir,
+            val_loader,
+            K_NEIGHBORS,
+            GUIDANCE_SCALE,
+            epoch="last",
+            seed=VALIDATION_SEED,
+        )
+
+        model_filename = f"model_last_{run_name}.pth"
+        save_path = os.path.join(savedir, model_filename)
+        model_to_save = model.module if hasattr(model, "module") else model
+        torch.save(model_to_save.state_dict(), save_path)  # type: ignore
+
+        if best_model is not None:
+            model_filename = f"model_best_{run_name}.pth"
+            save_path = os.path.join(savedir, model_filename)
+
+            torch.save(best_model, save_path)
+
+            print(f"Model saved to {save_path}")
+
+            eval_model.load_state_dict(best_model)  # type: ignore
             generate_images(
                 eval_model,
                 figs_dir,
                 val_loader,
                 K_NEIGHBORS,
                 GUIDANCE_SCALE,
-                epoch=str(epoch),
+                epoch="last_after_loading",
                 seed=VALIDATION_SEED,
             )
 
-            # Helper to get the underlying model whether wrapped or not
-            model_to_save = model.module if hasattr(model, "module") else model
-            torch.save(
-                model_to_save.state_dict(),  # type: ignore
-                os.path.join(savedir, f"model_{epoch}_{run_name}.pth"),
-            )
+        wandb.finish()
 
-    # --- Early Stopping ---
-    if val_epoch_loss <= best_loss:
-        plateau_count = 0
-        best_loss = val_epoch_loss
-
-        model_to_save = model.module if hasattr(model, "module") else model
-        best_model = copy.deepcopy(model_to_save.state_dict())  # type: ignore
-        print(f"  --> New Best Model! (Val Loss: {best_loss:.4f})")
-    else:
-        plateau_count += 1
-        print(f"  --> No improvement. Patience: {plateau_count}/{MAX_PLATEAU}")
-
-    if plateau_count >= MAX_PLATEAU:
-        print("Early stopping triggered.")
-        break
-
-print("\nTraining complete.")
-
-eval_model = model.module if hasattr(model, "module") else model
-generate_images(
-    eval_model,
-    figs_dir,
-    val_loader,
-    K_NEIGHBORS,
-    GUIDANCE_SCALE,
-    epoch="last",
-    seed=VALIDATION_SEED,
-)
-
-model_filename = f"model_last_{run_name}.pth"
-save_path = os.path.join(savedir, model_filename)
-model_to_save = model.module if hasattr(model, "module") else model
-torch.save(model_to_save.state_dict(), save_path)  # type: ignore
-
-if best_model is not None:
-    model_filename = f"model_best_{run_name}.pth"
-    save_path = os.path.join(savedir, model_filename)
-
-    torch.save(best_model, save_path)
-
-    print(f"Model saved to {save_path}")
-
-    eval_model.load_state_dict(best_model)  # type: ignore
-    generate_images(
-        eval_model,
-        figs_dir,
-        val_loader,
-        K_NEIGHBORS,
-        GUIDANCE_SCALE,
-        epoch="last_after_loading",
-        seed=VALIDATION_SEED,
-    )
+    cleanup()
 
 
-wandb.finish()
+if __name__ == "__main__":
+    main()
