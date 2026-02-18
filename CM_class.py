@@ -61,6 +61,8 @@ if __name__ == "__main__":
     # Initialize
     ds = ColoredMNIST(root="../../../../datasets/MNIST", train=True, download=True, transform=t)
 
+    print("len: ", len(ds))
+
     # Grab 3 samples
     fig, axes = plt.subplots(1, 3, figsize=(10, 4))
     for i in range(3):

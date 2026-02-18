@@ -4,8 +4,8 @@ import os
 import numpy as np
 import torch
 import wandb
+from GlaucomaH_class import GlaucomaHarvardDataset
 from GlaucomaH_generate_images import generate_images
-from retina_dataset import GlaucomaHarvardDataset
 from torch.utils.data import DataLoader
 from torchdyn.core import NeuralODE
 from torchvision import transforms

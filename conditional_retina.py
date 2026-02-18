@@ -4,7 +4,7 @@ import os
 import torch
 import torchdiffeq
 import wandb
-from retina_dataset import GlaucomaHarvardDataset
+from GlaucomaH_class import GlaucomaHarvardDataset
 from torch.utils.data import DataLoader
 from torchdyn.core import NeuralODE
 from torchvision import transforms

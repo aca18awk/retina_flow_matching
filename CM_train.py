@@ -17,7 +17,7 @@ from torchcfm.conditional_flow_matching import TargetConditionalFlowMatcher
 from torchcfm.models.unet import UNetModel
 
 # --- Configuration ---
-savedir = "models/17_Feb_CM_test"
+savedir = "models/17_Feb_CM_1_gpu"
 os.makedirs(savedir, exist_ok=True)
 figs_dir = os.path.join(savedir, "figs")
 os.makedirs(figs_dir, exist_ok=True)
@@ -28,11 +28,11 @@ VALIDATION_SEED = 42
 GUIDANCE_SCALE = 3.0
 
 # training params
-N_EPOCHS = 100
+N_EPOCHS = 50
 BATCH_SIZE = 128
 MAX_PLATEAU = 2000
 LEARNING_RATE = 0.0001
-K_NEIGHBORS = 10  # The FSFM "k"
+K_NEIGHBORS = 2  # The FSFM "k"
 
 # model params
 NUM_CHANNELS_U_NET = 64
