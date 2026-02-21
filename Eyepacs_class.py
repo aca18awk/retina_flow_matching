@@ -118,14 +118,20 @@ class EyepacsDataset(Dataset):
         # Note: Ensure these .pt files are in your working directory
         # or update the path to load them from 'base_path' if you move them too.
         if purpose == "train":
-            self.features = load("Eyepacs_train_features_class_restricted.pt", map_location="cpu")
-            self.indices = load("Eyepacs_train_indices_class_restricted.pt", map_location="cpu")
-        else:
             self.features = load(
-                "Eyepacs_validation_features_class_restricted.pt", map_location="cpu"
+                "Eyepacs_vectors/Eyepacs_train_features_class_restricted.pt", map_location="cpu"
             )
             self.indices = load(
-                "Eyepacs_validation_indices_class_restricted.pt", map_location="cpu"
+                "Eyepacs_vectors/Eyepacs_train_indices_class_restricted.pt", map_location="cpu"
+            )
+        else:
+            self.features = load(
+                "Eyepacs_vectors/Eyepacs_validation_features_class_restricted.pt",
+                map_location="cpu",
+            )
+            self.indices = load(
+                "Eyepacs_vectors/Eyepacs_validation_indices_class_restricted.pt",
+                map_location="cpu",
             )
 
         # --- 2. File Collection ---
