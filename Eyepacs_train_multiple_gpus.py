@@ -39,7 +39,7 @@ def main():
     device = torch.device(f"cuda:{local_rank}")
 
     # --- Configuration ---
-    savedir = "models/18_Feb_Eyepacs_DDP"
+    savedir = "models/20_Feb_Eyepacs_dominant_weight"
     figs_dir = os.path.join(savedir, "figs")
 
     # Hyperparams
@@ -47,7 +47,7 @@ def main():
     GUIDANCE_SCALE = 3.0
     N_EPOCHS = 500
     BATCH_SIZE = 42  # Per GPU (Total effective batch = 126 * 3 = 378)
-    LEARNING_RATE = 0.0002
+    LEARNING_RATE = 0.0001
     K_NEIGHBORS = 2
     IMG_SIZE = 128
 
@@ -71,6 +71,8 @@ def main():
                 "batch_size": BATCH_SIZE,
                 "image_size": IMG_SIZE,
                 "mixed_precision": True,
+                "weight decay": False,
+                "indices_file": "Eyepacs_val_indices_same_label",
             },
         )
         run_name = logger.name or "FSFM_Run"
@@ -145,7 +147,11 @@ def main():
     # DDP Wrapper
     model = DDP(model, device_ids=[local_rank])
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=LEARNING_RATE,
+        # weight_decay=1e-5,
+    )
     scaler = GradScaler()
     FM = TargetConditionalFlowMatcher(sigma=0.0)
 
@@ -153,7 +159,7 @@ def main():
     best_model = None
 
     start_epoch = 0
-    # resume_path = os.path.join(savedir, "model_20_old.pth")  # Make sure this file exists!
+    # resume_path = os.path.join(savedir, "model_30.pth")  # Make sure this file exists!
 
     # if os.path.exists(resume_path):
     #     # We must use map_location to load correctly on DDP
@@ -168,7 +174,7 @@ def main():
     #         # Fallback if keys don't match exactly (sometimes DDP adds/removes prefixes)
     #         model.load_state_dict(checkpoint)
 
-    #     start_epoch = 21  # Skip the first 20
+    #     start_epoch = 31  # Skip the first 20
     #     print(f"[Rank {global_rank}] Resuming from Epoch 20!")
 
     # print(f"[Rank {global_rank}] Ready to train.")
@@ -180,7 +186,6 @@ def main():
         train_avg_loss = []
 
         for i, (x1, y1) in enumerate(train_loader):
-            print(">>>>", i)
             x1 = x1.to(device, non_blocking=True)
             y1 = y1.to(device, non_blocking=True)
 
@@ -201,13 +206,20 @@ def main():
                 vt = model(t, xt, label)
                 loss = torch.mean((vt - ut) ** 2)
 
+            if torch.isnan(loss):
+                print(
+                    f"[Rank {global_rank}] WARNING: Loss is NaN at step {i}! Zeroing loss to avoid DDP hang."
+                )
+                loss = torch.tensor(0.0, device=device, requires_grad=True)
+
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             scaler.step(optimizer)
             scaler.update()
 
-            train_avg_loss.append(loss.item())
+            if loss.item() > 0:
+                train_avg_loss.append(loss.item())
 
         # This averages the loss across all 3 GPUs so WandB shows the TRUE global loss
         local_loss = torch.tensor(np.mean(train_avg_loss), device=device)
@@ -240,6 +252,7 @@ def main():
 
             # Save Checkpoints & Generate Images
             if epoch % 10 == 0:
+                print(">>>>", i)
                 model.eval()
                 # Access underlying model for saving
                 model_to_save = model.module
@@ -267,17 +280,6 @@ def main():
     print("\nTraining complete.")
 
     if global_rank == 0:
-        eval_model = model.module if hasattr(model, "module") else model
-        generate_images(
-            eval_model,
-            figs_dir,
-            val_loader,
-            K_NEIGHBORS,
-            GUIDANCE_SCALE,
-            epoch="last",
-            seed=VALIDATION_SEED,
-        )
-
         model_filename = f"model_last_{run_name}.pth"
         save_path = os.path.join(savedir, model_filename)
         model_to_save = model.module if hasattr(model, "module") else model
@@ -290,6 +292,8 @@ def main():
             torch.save(best_model, save_path)
 
             print(f"Model saved to {save_path}")
+
+            eval_model = model.module if hasattr(model, "module") else model
 
             eval_model.load_state_dict(best_model)  # type: ignore
             generate_images(

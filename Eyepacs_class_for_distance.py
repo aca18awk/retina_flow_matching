@@ -1,11 +1,13 @@
+import csv
 import os
 from typing import List, Literal, Optional
 
 import numpy as np
+import torch
 import torchvision.transforms.functional as TF
 import torchvision.utils as vutils
 from PIL import Image
-from torch import cat, distributions, empty, load, ones, randperm, stack, tensor
+from torch import cat, distributions, ones, randperm, stack
 from torch.utils.data import Dataset
 from torchvision import transforms
 
@@ -75,7 +77,6 @@ class CropToFundus:
         cmin, cmax = np.where(cols)[0][[0, -1]]
 
         # 4. Scale coordinates back to original image size
-        # We add a small buffer/padding to ensure we don't cut too aggressively due to scaling
         real_cmin = int(np.floor(cmin * scale_x))
         real_rmin = int(np.floor(rmin * scale_y))
         real_cmax = int(np.ceil((cmax + 1) * scale_x))
@@ -94,7 +95,8 @@ class CropToFundus:
 class EyepacsDataset(Dataset):
     def __init__(
         self,
-        root: Optional[str] = None,  # <--- NEW ARGUMENT
+        root: Optional[str] = None,
+        csv_path: str = "/vol/biomedic3/awk24/datasets/EYEPACS/trainLabels.csv",  # <--- NEW ARGUMENT
         purpose: DatasetSplit = "train",
         img_size=128,
         k_neighbours=3,
@@ -102,9 +104,20 @@ class EyepacsDataset(Dataset):
         self.purpose = purpose
         self.image_paths: List[str] = []
         self.k_neighbours = k_neighbours
+        self.labels_map = {}  # <--- NEW: Dictionary to store image -> level mappings
+
+        # --- 0. Load Labels from CSV ---
+        if os.path.exists(csv_path):
+            print(f"Loading labels from {csv_path}...")
+            with open(csv_path, mode="r") as infile:
+                reader = csv.DictReader(infile)
+                for row in reader:
+                    # Maps "10_left" -> 0
+                    self.labels_map[row["image"]] = int(row["level"])
+        else:
+            print(f"WARNING: Label CSV not found at {csv_path}. Labels will default to -1.")
 
         # --- 1. Path Selection Logic ---
-        # If 'root' is not passed, fall back to the global default
         base_path = root if root is not None else DEFAULT_ROOT_PATH
 
         if purpose == "train":
@@ -114,19 +127,8 @@ class EyepacsDataset(Dataset):
 
         data_path = os.path.join(base_path, folder_name)
 
-        # Load Cached Data (Features)
-        # Note: Ensure these .pt files are in your working directory
-        # or update the path to load them from 'base_path' if you move them too.
-        if purpose == "train":
-            self.features = load("Eyepacs_train_features_class_restricted.pt", map_location="cpu")
-            self.indices = load("Eyepacs_train_indices_class_restricted.pt", map_location="cpu")
-        else:
-            self.features = load(
-                "Eyepacs_validation_features_class_restricted.pt", map_location="cpu"
-            )
-            self.indices = load(
-                "Eyepacs_validation_indices_class_restricted.pt", map_location="cpu"
-            )
+        self.features = None
+        self.indices = None
 
         # --- 2. File Collection ---
         valid_extensions = {".jpg", ".jpeg", ".png"}
@@ -156,8 +158,6 @@ class EyepacsDataset(Dataset):
         # --- 4. Pipeline Definitions ---
         self.pre_process = transforms.Compose(
             [
-                # CropToFundus(tolerance=10, downscale_size=512),  # <--- Uses optimized version
-                # PadToSquare(),
                 transforms.Resize([img_size, img_size]),
             ]
         )
@@ -171,6 +171,13 @@ class EyepacsDataset(Dataset):
 
     def __getitem__(self, index):
         img_path = self.image_paths[index]
+
+        # --- NEW: Extract Label ---
+        # Get filename without extension (e.g., "13_right" from "13_right.png")
+        img_name = os.path.splitext(os.path.basename(img_path))[0]
+        # Look up label, default to -1 if missing
+        label = self.labels_map.get(img_name, -1)
+        label_tensor = torch.tensor(label, dtype=torch.long)
 
         try:
             image = Image.open(img_path).convert("RGB")
@@ -189,7 +196,6 @@ class EyepacsDataset(Dataset):
             neighbor_idxs = self.indices[index]
             num_neighbors_to_sample = self.k_neighbours
 
-            # Safety check for k_neighbors
             if len(neighbor_idxs) < num_neighbors_to_sample:
                 num_neighbors_to_sample = len(neighbor_idxs)
 
@@ -201,31 +207,14 @@ class EyepacsDataset(Dataset):
 
             vectors = cat([self_feat, neighbor_feats], dim=0)
 
-            # Fix: Ensure Dirichlet has correct shape based on actual neighbors found
-            # weights = distributions.Dirichlet(ones(len(vectors))).sample()
-
-            # 1. Sample the main image weight uniformly from [0.5, 0.9]
-            w_main = empty(1).uniform_(0.5, 0.9)
-
-            num_neighbors = len(vectors) - 1
-
-            if num_neighbors > 0:
-                # 2. Sample random weights for neighbors that sum to 1.0
-                w_others = distributions.Dirichlet(ones(num_neighbors)).sample()
-
-                # 3. Scale the neighbor weights so they sum to the remaining probability mass
-                w_others = w_others * (1.0 - w_main)
-
-                # 4. Combine the main weight and the neighbor weights
-                weights = cat([w_main, w_others], dim=0)
-            else:
-                # Fallback in case a sample has 0 neighbors
-                weights = tensor([1.0])
-
+            weights = distributions.Dirichlet(ones(len(vectors))).sample()
             condition = (vectors * weights.unsqueeze(1)).sum(dim=0)
-            return image, condition
 
-        return image
+            # --- NEW: Return image, condition AND label ---
+            return image, condition, label_tensor
+
+        # --- NEW: Return image AND label ---
+        return image, label_tensor
 
 
 # --- Testing the Logic ---
@@ -235,14 +224,16 @@ if __name__ == "__main__":
         """Helper to save a grid of the first N images from a dataset."""
         print(f"Saving preview to {filename}...")
 
-        # 1. Collect first N images
         images = []
         for i in range(min(num_images, len(dataset))):
             item = dataset[i]
 
-            # CHECK: If dataset returns (image, condition), unpack it
+            # CHECK: Unpack tuple safely based on length
             if isinstance(item, tuple):
-                img, cond = item
+                if len(item) == 3:
+                    img, cond, label = item
+                else:
+                    img, label = item
                 images.append(img)
             else:
                 images.append(item)
@@ -251,15 +242,8 @@ if __name__ == "__main__":
             print("No images found to save.")
             return
 
-        # 2. Stack them into a single tensor (Batch, C, H, W)
         batch = stack(images)
-
-        # 3. Un-normalize from [-1, 1] back to [0, 1] for viewing
-        #    (img * 0.5 + 0.5)
         batch = batch * 0.5 + 0.5
-
-        # 4. Create a grid and save
-        #    nrow=5 means all 5 images in one row
         vutils.save_image(batch, filename, nrow=num_images, padding=2)
         print("Saved!")
 
@@ -267,10 +251,16 @@ if __name__ == "__main__":
     print("--- Loading Train ---")
     train_ds = EyepacsDataset(purpose="train")
 
-    # Save preview
     save_preview(train_ds, "preview_train_cropToFundus_PadToSquare_final.png")
 
     if len(train_ds) > 0:
-        img, cond = train_ds[0]
-        print(f"Train Output Shape: {img.shape}")  # type: ignore
-        print(f"Train Output Range: Min {img.min():.2f}, Max {img.max():.2f}")  # type: ignore
+        item = train_ds[0]
+        if isinstance(item, tuple):
+            if len(item) == 3:
+                img, cond, label = item
+                print(f"Train Output Shape: {img.shape}, Label: {label.item()}")
+            else:
+                img, label = item
+                print(f"Train Output Shape: {img.shape}, Label: {label.item()}")
+        else:
+            print("Something is wrong, dataset didn't return a tuple.")

@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.models as models
+import torchvision.transforms.functional as TF
 
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
@@ -11,7 +13,15 @@ encoder = encoder.to(device)
 encoder.eval()  # Freeze batchnorm and dropout
 
 
-def get_fsfm_condition(x_batch, k=2, return_neigh=False, ensure_same_label=False, labels=None):
+def get_fsfm_condition(
+    x_batch,
+    k=2,
+    return_neigh=False,
+    ensure_same_label=False,
+    labels=None,
+    return_components=False,
+    normalised=True,
+):
     """
     Takes 1-channel MNIST batch, converts to 3-channel,
     extracts latents, and performs batch-wise k-NN pooling.
@@ -27,10 +37,23 @@ def get_fsfm_condition(x_batch, k=2, return_neigh=False, ensure_same_label=False
         else:
             x_input = x_batch
 
-        # 2. Extract latents z
-        z = encoder(x_input)  # [B, 512]
+        if normalised:
+            # 2. MATCH TRAINING: Un-normalize from [-1, 1] back to [0, 1]
+            # (Since your MessidorDataset outputs [-1, 1] for Flow Matching)
+            # x_input = (x_input + 1.0) / 2.0
 
-        # 3. Calculate Distance Matrix
+            # 3. MATCH TRAINING: Apply ImageNet Normalization
+            x_input = TF.normalize(x_input, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+            # 4. Extract latents z
+            raw_z = encoder(x_input)  # [B, 512]
+
+            # 5. MATCH TRAINING: L2 Feature Normalization (Crucial!)
+            z = F.normalize(raw_z, p=2, dim=1)
+        else:
+            z = encoder(x_input)
+
+        # 6. Calculate Distance Matrix
         dist = torch.cdist(z, z)  # [B, B]
 
         # Only mask if requested AND labels are provided
@@ -41,23 +64,25 @@ def get_fsfm_condition(x_batch, k=2, return_neigh=False, ensure_same_label=False
             # Set distance to infinity where labels are different
             dist = dist.masked_fill(~label_match_mask, float("inf"))
 
-        # 4. Find k+1 nearest neighbors
+        # 7. Find k+1 nearest neighbors
         actual_k = min(k + 1, z.shape[0])
 
         # Get values (dists) to check for infinity
         dists, indices = torch.topk(dist, k=actual_k, largest=False)
 
-        # 5. Gather Features
+        # 8. Gather Features
         z_gathered = z[indices]  # [B, k+1, 512]
 
-        # 6. Safe Averaging (Masks out Infs if they exist)
-        # valid_mask is 1.0 for valid neighbors, 0.0 for "Inf" neighbors
+        # 9. Safe Averaging (Masks out Infs if they exist)
         valid_mask = (dists != float("inf")).float().unsqueeze(-1)  # [B, k+1, 1]
+
+        if return_components:
+            return z_gathered, valid_mask, indices
 
         # Sum valid vectors
         numerator = (z_gathered * valid_mask).sum(dim=1)  # [B, 512]
 
-        # Count valid neighbors (clamp min=1 to avoid div by zero if only self exists)
+        # Count valid neighbors (clamp min=1 to avoid div by zero)
         denominator = valid_mask.sum(dim=1).clamp(min=1.0)  # [B, 1]
 
         y = numerator / denominator

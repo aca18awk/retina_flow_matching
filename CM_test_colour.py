@@ -8,7 +8,9 @@ from PIL import Image
 
 # --- Configuration ---
 # 1. Path to your experiment folder (the one containing 0/, 1/, 2/...)
-EXPERIMENT_DIR = "models/15_Feb_Coloured_MNIST_FSFM_Latent/simulation_blue_GS_3_any_label/samples"
+EXPERIMENT_DIR = (
+    "models/15_Feb_Coloured_MNIST_FSFM_Latent/simulation_blue_same_label_3_barycentric/samples"
+)
 
 # 2. What color are we expecting? (options: "red", "green", "blue")
 TARGET_COLOR = "blue"

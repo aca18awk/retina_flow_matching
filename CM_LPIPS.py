@@ -9,7 +9,9 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from torchvision import transforms
 
 # --- Configuration ---
-EXPERIMENT_ROOT = "models/15_Feb_Coloured_MNIST_FSFM_Latent/simulation_blue_GS_1_same_label"
+# EXPERIMENT_ROOT = "models/18_Feb_Eyepacs_DDP/simulation_GS_1.5_same_class_model_140"
+# EXPERIMENT_ROOT = "models/18_Feb_Eyepacs_DDP/simulation_GS_1.5_same_class_model_120"
+EXPERIMENT_ROOT = "models/18_Feb_Eyepacs_DDP/hidden_class_samples_unique"
 
 # Derived Paths
 SAMPLES_DIR = os.path.join(EXPERIMENT_ROOT, "samples")
