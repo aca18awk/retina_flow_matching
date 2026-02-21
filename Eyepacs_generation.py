@@ -4,12 +4,11 @@ import torch
 import torch.nn as nn
 
 # --- Imports from your project structure ---
-from CM_class import ColoredMNIST
 from get_fsfm_condition import get_fsfm_condition
+from Messidor_class import MessidorDataset
 from torch.distributions import Exponential
 from torch.utils.data import DataLoader
 from torchdiffeq import odeint
-from torchvision import transforms
 from torchvision.utils import make_grid, save_image
 
 from torchcfm.models.unet import UNetModel
@@ -21,6 +20,8 @@ device = torch.device("cuda" if use_cuda else "cpu")
 
 def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
     model.eval()
+
+    # Create Output Directories
     sample_folder_root = os.path.join(savedir, "samples")
     os.makedirs(sample_folder_root, exist_ok=True)
 
@@ -28,8 +29,10 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
     os.makedirs(summary_folder_root, exist_ok=True)
 
     # 1. Load Batch
+    # MessidorDataset returns (image, label, filename)
     try:
-        val_batch, val_labels = next(iter(val_loader))
+        batch_data = next(iter(val_loader))
+        val_batch, val_labels, val_filenames = batch_data
     except StopIteration:
         print("Loader is empty!")
         return
@@ -40,36 +43,58 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
 
     print(f"Loaded batch of size {batch_size}. Calculating components...")
 
-    # 2. Get Raw Components
-    z_gathered, valid_masks, all_neighbor_indices = get_fsfm_condition(  # type: ignore
-        val_batch, labels=val_labels, k=K_NEIGHBORS, ensure_same_label=True, return_components=True
+    # 2. Get Raw Components (Features & Neighbors)
+    # Note: get_fsfm_condition needs to handle 256x256 images.
+    # Ideally, it extracts features (e.g. ResNet) internally.
+    val_batch_resized = torch.nn.functional.interpolate(
+        val_batch, size=(224, 224), mode="bilinear", align_corners=False
+    )
+
+    z_gathered, valid_masks, all_neighbor_indices = get_fsfm_condition(
+        val_batch_resized,
+        labels=val_labels,
+        k=K_NEIGHBORS,
+        ensure_same_label=True,
+        return_components=True,
+        normalised=False,
     )
 
     random_indices = torch.arange(batch_size)
 
-    # Define ODE Solver
+    # Define ODE Solver Vector Field
     def vector_field(t, x, cond, null_cond):
         t_vector = torch.ones(x.shape[0], device=device) * t
+        # Model forward pass
         v_cond = model(t_vector, x, y=cond)
         v_uncond = model(t_vector, x, y=null_cond)
+        # Classifier-Free Guidance
         return v_uncond + guidance_scale * (v_cond - v_uncond)
+
+    # 3. Iterate through each image in Hospital B
+    print(f"Generating cohorts for {len(random_indices)} patients...")
 
     for idx in random_indices:
         anchor_idx = idx.item()
+        anchor_filename = val_filenames[anchor_idx]
 
-        sample_folder = os.path.join(sample_folder_root, str(anchor_idx))
+        # Create subfolders for this specific patient
+        # We use the index + filename for clarity
+        folder_name = f"{anchor_idx}_{os.path.splitext(anchor_filename)[0]}"
+
+        sample_folder = os.path.join(sample_folder_root, folder_name)
         os.makedirs(sample_folder, exist_ok=True)
 
-        summary_folder = os.path.join(summary_folder_root, str(anchor_idx))
+        summary_folder = os.path.join(summary_folder_root, folder_name)
         os.makedirs(summary_folder, exist_ok=True)
 
         anchor_feats = z_gathered[anchor_idx]
         anchor_mask = valid_masks[anchor_idx].squeeze(-1)
 
         # --- DYNAMIC SAMPLING ---
-        n_samples = 100
+        n_samples = 20
 
-        # Sample weights
+        # Sample weights from Dirichlet/Exponential to mix neighbors
+        # This creates the "Condition" (z) for the flow matching
         raw_weights = (
             Exponential(torch.tensor(1.0)).sample((n_samples, anchor_feats.shape[0])).to(device)
         )
@@ -77,11 +102,11 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
         weight_sum = masked_weights.sum(dim=1, keepdim=True).clamp(min=1e-6)
         final_weights = masked_weights / weight_sum
 
-        # Calculate condition
+        # Calculate condition vector
         cond_batch = (final_weights.unsqueeze(-1) * anchor_feats.unsqueeze(0)).sum(dim=1)
         null_cond_batch = torch.zeros_like(cond_batch)
 
-        # Generate
+        # Generate Noise
         x0 = torch.randn(n_samples, *val_batch.shape[1:], device=device)
 
         with torch.no_grad():
@@ -104,7 +129,7 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
 
         # 1. Save Original Anchor (The "Patient Zero")
         original_img = (val_batch[anchor_idx] + 1) / 2
-        save_image(original_img, os.path.join(summary_folder, "original.png"))  # <--- ADDED THIS
+        save_image(original_img, os.path.join(summary_folder, "original.png"))
 
         # 2. Save Neighbors Reference
         my_neighbor_indices = all_neighbor_indices[anchor_idx]
@@ -114,11 +139,11 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
             os.path.join(summary_folder, "neighbors_reference.png"),
         )
 
-        # 3. Save Cohort Grid
+        # 3. Save Cohort Grid (The synthetic images)
         grid_img = make_grid(generated_imgs_denorm, nrow=10, padding=2, normalize=False)
         save_image(grid_img, os.path.join(summary_folder, "cohort_grid.png"))
 
-        print(f"  Processed Anchor {anchor_idx}")
+        print(f"  Processed {folder_name} (Class {val_labels[anchor_idx].item()})")
 
 
 if __name__ == "__main__":
@@ -128,45 +153,36 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(SEED)
 
     # --- Setup Directories ---
-    # Adjust this path as needed
-    savedir = "models/15_Feb_Coloured_MNIST_FSFM_Latent"
-    experiment_dir = os.path.join(savedir, "simulation_blue_GS_7_same_label")
+    # Update this to where you want to save the results
+
+    savedir = "models/19_Feb_Eyepacs_DDP/"
+    experiment_dir = os.path.join(savedir, "simulation_GS_1.5_same_class_model_400")
     os.makedirs(experiment_dir, exist_ok=True)
 
     # --- Params ---
     BATCH_SIZE = 50
     K_NEIGHBORS = 2
-    GUIDANCE_SCALE = 3
+    GUIDANCE_SCALE = 1.5
 
     # Model Architecture
-    NUM_CHANNELS_U_NET = 64
+    NUM_CHANNELS_U_NET = 128
     NUM_RES_BLOCKS_U_NET = 2
-    CHANNEL_MULT = (1, 2, 4)
-    ATTENTION_RESOLUTIONS = "16, 8"
-    IMG_SIZE = 32
+    CHANNEL_MULT = (1, 2, 4, 8)  # Deep semantics: 128->256->512->1024
+    ATTENTION_RESOLUTIONS = "32, 16, 8"
+    IMG_SIZE = 128
     NO_OF_CHANNELS_IMG = 3
 
-    # --- Data ---
-    if NO_OF_CHANNELS_IMG == 1:
-        normalise = transforms.Normalize((0.5,), (0.5,))
-    else:
-        normalise = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-
-    transform = transforms.Compose(
-        [transforms.Resize((IMG_SIZE, IMG_SIZE)), transforms.ToTensor(), normalise]
+    # Initialize Dataset with purpose="hospital_b"
+    print("Loading Hospital B dataset...")
+    val_dataset = MessidorDataset(
+        purpose="hospital_b",
+        root_dir="/vol/biomedic3/awk24/datasets/Messidor2_256",
+        csv_path="/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv",
+        img_size=IMG_SIZE,
     )
 
-    # NOTE: Set color idx=2 for BLUE ONLY experiment
-    val_dataset = ColoredMNIST(
-        root="../../../../datasets/MNIST",
-        train=False,
-        download=True,
-        transform=transform,
-        set_color_idx=2,  # ONLY BLUE
-    )
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
-    # --- Model Init ---
     model = UNetModel(
         dim=(NO_OF_CHANNELS_IMG, IMG_SIZE, IMG_SIZE),
         num_channels=NUM_CHANNELS_U_NET,
@@ -186,7 +202,7 @@ if __name__ == "__main__":
     ).to(device)
 
     # --- Load Weights ---
-    model_path = os.path.join(savedir, "model_80_expressive-romance-10.pth")
+    model_path = os.path.join(savedir, "model_400.pth")
 
     if os.path.exists(model_path):
         print(f"Loading weights from {model_path}...")
@@ -197,7 +213,7 @@ if __name__ == "__main__":
         exit()
 
     # --- Run Generation ---
-    print(f"Starting Hospital B Simulation (Blue Only, N=50, GS={GUIDANCE_SCALE})...")
+    print(f"Starting Simulation on Hospital B (N={len(val_dataset)})...")
 
     with torch.no_grad():
         generate_cohorts(model, val_loader, K_NEIGHBORS, GUIDANCE_SCALE, savedir=experiment_dir)

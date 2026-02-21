@@ -1,127 +1,89 @@
 import os
+from typing import Literal
 
-import numpy as np
 import pandas as pd
-import torchvision.transforms.functional as TF
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-# --- Helper Classes (Same as before) ---
-
-
-class PadToSquare:
-    """Pads the image with black pixels to make it a perfect square."""
-
-    def __call__(self, img):
-        w, h = img.size
-        max_dim = max(w, h)
-        pad_left = (max_dim - w) // 2
-        pad_top = (max_dim - h) // 2
-        pad_right = max_dim - w - pad_left
-        pad_bottom = max_dim - h - pad_top
-        return TF.pad(img, (pad_left, pad_top, pad_right, pad_bottom), fill=0)
-
-
-class CropToFundus:
-    """Optimized cropping to remove black borders."""
-
-    def __init__(self, tolerance=10, downscale_size=512):
-        self.tolerance = tolerance
-        self.downscale_size = downscale_size
-
-    def __call__(self, img):
-        w, h = img.size
-        if min(w, h) < self.downscale_size:
-            img_small = img
-            scale_x, scale_y = 1.0, 1.0
-        else:
-            img_small = img.resize(
-                (self.downscale_size, self.downscale_size), resample=Image.NEAREST
-            )
-            scale_x = w / self.downscale_size
-            scale_y = h / self.downscale_size
-
-        img_np = np.array(img_small)
-        mask = img_np > self.tolerance
-        if img_np.ndim == 3:
-            has_content = mask.any(axis=2)
-        else:
-            has_content = mask
-
-        if not has_content.any():
-            return img
-
-        rows = np.any(has_content, axis=1)
-        cols = np.any(has_content, axis=0)
-        rmin, rmax = np.where(rows)[0][[0, -1]]
-        cmin, cmax = np.where(cols)[0][[0, -1]]
-
-        real_cmin = int(np.floor(cmin * scale_x))
-        real_rmin = int(np.floor(rmin * scale_y))
-        real_cmax = int(np.ceil((cmax + 1) * scale_x))
-        real_rmax = int(np.ceil((rmax + 1) * scale_y))
-
-        return img.crop(
-            (max(0, real_cmin), max(0, real_rmin), min(w, real_cmax), min(h, real_rmax))
-        )
-
-
-# --- Main Messidor Class ---
+# Define valid options for the 'purpose' argument
+MessidorSplit = Literal["hospital_b", "test", "hidden", "validation"]
 
 
 class MessidorDataset(Dataset):
     def __init__(
         self,
-        root_dir: str = "/vol/biomedic3/awk24/datasets/Messidor2",
-        csv_path: str = None,
-        img_size: int = 256,
+        purpose: MessidorSplit = "test",
+        root_dir: str = "/vol/biomedic3/awk24/datasets/Messidor2_256",
+        csv_path: str = "/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv",
+        img_size=128,
     ):
         """
         Args:
-            root_dir: Path to the folder containing images.
-            csv_path: Path to the CSV with labels (id_code, diagnosis, etc.).
-            img_size: Target size for resizing.
+            purpose: One of "hospital_b", "test", or "hidden".
+            root_dir: Path to the parent folder containing the processed subfolders.
+            csv_path: Path to the original CSV with labels.
         """
-        self.root_dir = root_dir
+        self.purpose = purpose
         self.image_paths = []
-        self.labels = {}  # Map filename -> dictionary of labels
+        self.labels = {}
+        self.img_size = img_size
 
-        # 1. Load CSV Data (if provided)
+        # 1. Select Subfolder based on Purpose
+        if purpose == "hospital_b":
+            subfolder = "hospital_b"
+        elif purpose == "test":
+            subfolder = "test"
+        elif purpose == "hidden":
+            subfolder = "hidden_classifier_data"
+        elif purpose == "validation":
+            subfolder = "validation"
+        else:
+            raise ValueError(
+                f"Invalid purpose '{purpose}'. Must be 'hospital_b', 'test', or 'hidden'."
+            )
+
+        self.data_dir = os.path.join(root_dir, subfolder)
+
+        # 2. Load CSV Data (Labels)
+        # We still need the CSV to map the filename to the diagnosis
         if csv_path and os.path.exists(csv_path):
             print(f"Loading labels from {csv_path}...")
             df = pd.read_csv(csv_path)
-            # Ensure we can match filename (e.g. "IM002584.JPG" or just "IM002584") to the row
-            # We assume the CSV 'id_code' column might match the filename
+
             for _, row in df.iterrows():
-                # Store all column data for this ID
+                # We assume 'id_code' matches the filename stem (e.g. IM0001)
                 key = str(row["id_code"]).strip()
                 self.labels[key] = row.to_dict()
+        else:
+            print(f"Warning: CSV path {csv_path} not found. Labels will be -1.")
 
-        # 2. Collect All Images
+        # 3. Collect Images from the Specific Subfolder
         valid_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tif"}
-        print(f"Scanning files in {root_dir}...")
+        print(f"Scanning files in {self.data_dir}...")
 
-        for root, _, files in os.walk(root_dir):
+        if not os.path.exists(self.data_dir):
+            raise FileNotFoundError(
+                f"Directory {self.data_dir} does not exist. Did you run the split script?"
+            )
+
+        for root, _, files in os.walk(self.data_dir):
             for file in files:
                 if os.path.splitext(file)[1].lower() in valid_extensions:
-                    full_path = os.path.join(root, file)
-                    self.image_paths.append(full_path)
+                    self.image_paths.append(os.path.join(root, file))
 
         self.image_paths.sort()
-        print(f"Found {len(self.image_paths)} images.")
+        print(f"Found {len(self.image_paths)} images for split '{purpose}'.")
 
-        # 3. Define Preprocessing Pipeline
-        self.pre_process = transforms.Compose(
+        # 4. Define Transform
+        # Images are already 256x256, Cropped and Padded.
+        # We just need to convert to Tensor and Normalize to [-1, 1] range.
+        self.transform = transforms.Compose(
             [
-                CropToFundus(tolerance=10, downscale_size=512),
-                PadToSquare(),
                 transforms.Resize([img_size, img_size]),
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
             ]
-        )
-
-        self.to_tensor = transforms.Compose(
-            [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
         )
 
     def __len__(self):
@@ -136,44 +98,46 @@ class MessidorDataset(Dataset):
             image = Image.open(img_path).convert("RGB")
         except Exception as e:
             print(f"Error loading {img_path}: {e}")
-            image = Image.new("RGB", (128, 128))
+            # Return black image if failed
+            image = Image.new("RGB", (256, 256))
 
-        # 2. Preprocess
-        image = self.pre_process(image)
-        image_tensor = self.to_tensor(image)
+        # 2. Apply Transform (ToTensor + Normalize)
+        image = self.transform(image)
 
-        # 3. Retrieve Labels (if available)
-        # We try to match exact filename, or filename without extension
+        # 3. Retrieve Label
         label_data = {}
-
-        # Try finding key 'IM002584.JPG' or 'IM002584'
+        # Try finding key with or without extension
         if filename in self.labels:
             label_data = self.labels[filename]
         elif os.path.splitext(filename)[0] in self.labels:
             label_data = self.labels[os.path.splitext(filename)[0]]
 
-        # Extract specific diagnosis if present, else default to -1
         diagnosis = label_data.get("diagnosis", -1)
 
-        # Return: Image Tensor, The Diagnosis Label, The Filename (for moving files later)
-        return image_tensor, diagnosis, filename
+        return image, diagnosis, filename
 
 
-# --- Usage Example for your selection task ---
+# --- Testing the Logic ---
 if __name__ == "__main__":
-    # Example CSV path - update this to your actual CSV location
-    csv_file = "/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv"
-
-    # Initialize
-    ds = MessidorDataset(
-        root_dir="/vol/biomedic3/awk24/datasets/Messidor2",
-        csv_path=csv_file,  # Set to None if you don't have the CSV ready yet
-        img_size=256,
+    # Configuration
+    processed_root = "/vol/biomedic3/awk24/datasets/Messidor2_256"
+    csv_file = (
+        "/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv"  # Or messidor_labels.csv
     )
 
-    # Iterate to plot or select
-    # This loop is just to show how you access data to make your "hospital_B" selection
-    print("Inspecting first 5 items...")
-    for i in range(5):
-        img, diagnosis, fname = ds[i]
-        print(f"File: {fname} | Diagnosis: {diagnosis} | Shape: {img.shape}")
+    print("--- Testing Hospital B Split ---")
+    try:
+        ds_b = MessidorDataset(purpose="hospital_b", root_dir=processed_root, csv_path=csv_file)
+        if len(ds_b) > 0:
+            img, label, fname = ds_b[0]
+            print(f"Sample: {fname} | Label: {label} | Tensor Shape: {img.shape}")
+            print(f"Min: {img.min():.2f} | Max: {img.max():.2f} (Should be approx -1 to 1)")
+    except Exception as e:
+        print(e)
+
+    print("\n--- Testing Test Split ---")
+    try:
+        ds_test = MessidorDataset(purpose="test", root_dir=processed_root, csv_path=csv_file)
+        print(f"Test Set Size: {len(ds_test)}")
+    except Exception as e:
+        print(e)
