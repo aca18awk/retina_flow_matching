@@ -2,6 +2,7 @@ import glob
 import os
 
 import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
 import torch
 import umap
@@ -9,10 +10,11 @@ from Eyepacs_class_for_distance import EyepacsDataset
 from Messidor_class import MessidorDataset
 from sklearn.linear_model import LogisticRegression
 from sklearn.manifold import TSNE
-from sklearn.metrics import accuracy_score, classification_report, cohen_kappa_score
+from sklearn.metrics import accuracy_score, classification_report, cohen_kappa_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+from torch.distributions import Exponential
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -21,6 +23,16 @@ BASE_DIR = "embeddings"
 # Set to True to train on the current split (e.g., 'hidden') and test on 'test'
 # Set to False to just do a standard 80/20 train_test_split on the current split
 USE_EXPLICIT_MESSIDOR_TEST = True
+
+# --- BARYCENTRIC AUGMENTATION SETTINGS ---
+APPLY_AUGMENTATION = True
+K_NEIGHBORS = 2
+N_SAMPLES_PER_ANCHOR = 20
+
+IS_BINARY = False
+BORDER_CLASS = 2
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def get_dataset(dataset_name, split):
@@ -55,8 +67,68 @@ def get_true_labels(dataset):
     return torch.cat(labels_list, dim=0).numpy()
 
 
+def generate_barycentric_samples(X, y, k=2, n_samples=20):
+    """
+    Takes Real Features (X) and Labels (y) and generates Synthetic vectors
+    using Barycentric interpolation between same-class nearest neighbors.
+    """
+    X_t = torch.tensor(X, dtype=torch.float32).to(DEVICE)
+    y_t = torch.tensor(y, dtype=torch.long).to(DEVICE)
+
+    # Calculate Distance Matrix & Masking inline
+    dist = torch.cdist(X_t, X_t)
+    label_match_mask = y_t.unsqueeze(0) == y_t.unsqueeze(1)
+    dist = dist.masked_fill(~label_match_mask, float("inf"))
+
+    # Find K_NEIGHBORS + 1 (since self is included at distance 0)
+    actual_k = min(k + 1, X_t.shape[0])
+    dists, indices = torch.topk(dist, k=actual_k, largest=False)
+
+    z_gathered = X_t[indices]
+    valid_masks = (dists != float("inf")).float().unsqueeze(-1)
+
+    synthetic_vectors = []
+    synthetic_labels = []
+
+    for anchor_idx in range(len(X_t)):
+        anchor_feats = z_gathered[anchor_idx]
+        anchor_mask = valid_masks[anchor_idx].squeeze(-1)
+        anchor_label = y[anchor_idx]
+
+        # Barycentric generation sampling math
+        raw_weights = (
+            Exponential(torch.tensor(1.0)).sample((n_samples, anchor_feats.shape[0])).to(DEVICE)
+        )
+        masked_weights = raw_weights * anchor_mask.unsqueeze(0)
+        weight_sum = masked_weights.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        final_weights = masked_weights / weight_sum
+
+        # The generated synthetic condition vectors
+        cond_batch = (final_weights.unsqueeze(-1) * anchor_feats.unsqueeze(0)).sum(dim=1)
+
+        synthetic_vectors.append(cond_batch.cpu())
+        synthetic_labels.extend([anchor_label] * n_samples)
+
+    X_syn = torch.cat(synthetic_vectors, dim=0).numpy()
+    y_syn = np.array(synthetic_labels)
+
+    # Combine Real and Synthetic
+    X_aug = np.concatenate([X, X_syn], axis=0)
+    y_aug = np.concatenate([y, y_syn], axis=0)
+
+    return X_aug, y_aug
+
+
 def evaluate_features(
-    name, X, y_valid, X_test_explicit=None, y_test_explicit=None, do_tsne=False, do_umap=False
+    name,
+    X,
+    y_valid,
+    X_test_explicit=None,
+    y_test_explicit=None,
+    do_tsne=False,
+    do_umap=False,
+    augment=False,
+    is_binary=False,
 ):
     print("\n" + "=" * 60)
     print(f"--- Evaluating {name} ---")
@@ -83,18 +155,28 @@ def evaluate_features(
             X_train_clean, y_train_clean, test_size=0.2, random_state=42
         )
 
-    # ---------------------------------------------------------
-    # 1. Linear Probe: NO CLASS WEIGHTS
-    # ---------------------------------------------------------
-    print("\nTraining Linear Probe (Unweighted)...")
-    clf_unweighted = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
-    clf_unweighted.fit(X_train, y_train)
-    preds_unweighted = clf_unweighted.predict(X_test)
-    acc_unweighted = accuracy_score(y_test, preds_unweighted)
-    print(f"-> Unweighted Accuracy: {acc_unweighted * 100:.2f}%")
+    # --- MINIMAL CHANGE: BINARIZE LABELS ---
+    # 0, 1 -> 0 (Non-Referable)
+    # 2, 3, 4 -> 1 (Referable)
+    if is_binary:
+        y_train = (y_train >= BORDER_CLASS).astype(int)
+        y_test = (y_test >= BORDER_CLASS).astype(int)
+
+    # --- INJECT BARYCENTRIC AUGMENTATION ---
+    if augment:
+        print(
+            f"\n-> Applying Barycentric Augmentation (K={K_NEIGHBORS}, Samples/Anchor={N_SAMPLES_PER_ANCHOR})..."
+        )
+        orig_len = len(X_train)
+        X_train, y_train = generate_barycentric_samples(
+            X_train, y_train, k=K_NEIGHBORS, n_samples=N_SAMPLES_PER_ANCHOR
+        )
+        print(
+            f"-> Augmented Training Set: {len(X_train)} vectors ({orig_len} Real + {len(X_train) - orig_len} Synthetic)"
+        )
 
     # ---------------------------------------------------------
-    # 2. Linear Probe: BALANCED CLASS WEIGHTS
+    # Linear Probe: BALANCED CLASS WEIGHTS
     # ---------------------------------------------------------
     print("\nTraining Linear Probe (Balanced Weights)...")
     clf_balanced = make_pipeline(
@@ -104,13 +186,27 @@ def evaluate_features(
     preds_balanced = clf_balanced.predict(X_test)
     acc_balanced = accuracy_score(y_test, preds_balanced)
 
-    qwk = cohen_kappa_score(y_test, preds_balanced, weights="quadratic")
-
     print(f"-> Balanced Accuracy: {acc_balanced * 100:.2f}%")
-    print(f"-> Quadratic Weighted Kappa (QWK): {qwk:.4f}  <-- THE MOST IMPORTANT METRIC")
-
-    print("\nDetailed Classification Report (Balanced Model):")
-    print(classification_report(y_test, preds_balanced, zero_division=0))
+    if is_binary:
+        preds_proba = clf_balanced.predict_proba(X_test)[:, 1]
+        auc = roc_auc_score(y_test, preds_proba)
+        score_text = f"AUC: {auc:.3f}"
+        print(f"-> ROC AUC Score: {auc:.4f}  <-- THE MOST IMPORTANT METRIC")
+        print("\nDetailed Binary Classification Report (Balanced Model):")
+        print(
+            classification_report(
+                y_test,
+                preds_balanced,
+                target_names=["Non-Referable (0,1)", "Referable (2,3,4)"],
+                zero_division=0,
+            )
+        )
+    else:
+        qwk = cohen_kappa_score(y_test, preds_balanced, weights="quadratic")
+        score_text = f"QWK: {qwk:.3f}"
+        print(f"-> Quadratic Weighted Kappa (QWK): {qwk:.4f}  <-- THE MOST IMPORTANT METRIC")
+        print("\nDetailed Classification Report (Balanced Model):")
+        print(classification_report(y_test, preds_balanced, zero_division=0))
 
     # ---------------------------------------------------------
     # 3. UMAP / t-SNE Visualization
@@ -131,7 +227,7 @@ def evaluate_features(
             alpha=0.8,
             linewidth=0,
         )
-        plt.title(f"{name}\nQWK: {qwk:.3f} | Balanced Acc: {acc_balanced * 100:.1f}%")
+        plt.title(f"{name}\n{score_text} | Balanced Acc: {acc_balanced * 100:.1f}%")
         plt.legend(title="DR Grade", bbox_to_anchor=(1.05, 1), loc="upper left")
         plt.tight_layout()
         plt.savefig(f"umap_{name}.png", dpi=300)
@@ -153,7 +249,7 @@ def evaluate_features(
             s=15,
             alpha=0.8,
         )
-        plt.title(f"{name}\nQWK: {qwk:.3f}")
+        plt.title(f"{name}\n{score_text}")
         plt.legend(title="DR Grade", bbox_to_anchor=(1.05, 1), loc="upper left")
         plt.tight_layout()
         plt.savefig(f"tsne_{name}.png", dpi=300)
@@ -178,7 +274,7 @@ if __name__ == "__main__":
         # splits = [
         #     s for s in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, s))
         # ]
-        splits = ["hidden", "hospital_b"]
+        splits = ["hospital_b"]
 
         for split in splits:
             split_dir = os.path.join(dataset_dir, split)
@@ -208,21 +304,16 @@ if __name__ == "__main__":
 
             # --- 3. Evaluate Every File ---
             for pt_file in pt_files:
-                # E.g., "Messidor_hidden_features_RETFOUND_MAE"
                 name = os.path.basename(pt_file).replace(".pt", "")
 
-                # Load training features
                 X_train = torch.load(pt_file, map_location="cpu").numpy()
                 X_test = None
                 y_test = None
 
-                # Fetch corresponding test features if explicit testing is enabled
                 if y_test_full is not None:
-                    # Look for the exact matching feature file in the /test/ directory
                     test_pt_file = pt_file.replace(f"/{split}/", "/test/").replace(
                         f"_{split}_", "_test_"
                     )
-
                     if os.path.exists(test_pt_file):
                         X_test = torch.load(test_pt_file, map_location="cpu").numpy()
                         y_test = y_test_full
@@ -232,13 +323,14 @@ if __name__ == "__main__":
                         )
                         print("Falling back to standard 80/20 train_test_split for this file.")
 
-                # Run evaluation
                 evaluate_features(
                     name=name,
                     X=X_train,
                     y_valid=y_train_full,
                     X_test_explicit=X_test,
                     y_test_explicit=y_test,
-                    do_umap=False,  # Toggle visualizations here
+                    do_umap=False,
                     do_tsne=False,
+                    augment=APPLY_AUGMENTATION,  # <--- Triggers the Barycentric Logic
+                    is_binary=IS_BINARY,
                 )
