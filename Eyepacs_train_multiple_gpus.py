@@ -39,13 +39,13 @@ def main():
     device = torch.device(f"cuda:{local_rank}")
 
     # --- Configuration ---
-    savedir = "models/20_Feb_Eyepacs_dominant_weight"
+    savedir = "models/21_Feb_Eyepacs_dinov3_no_labels"
     figs_dir = os.path.join(savedir, "figs")
 
     # Hyperparams
     VALIDATION_SEED = 42
     GUIDANCE_SCALE = 3.0
-    N_EPOCHS = 500
+    N_EPOCHS = 400
     BATCH_SIZE = 42  # Per GPU (Total effective batch = 126 * 3 = 378)
     LEARNING_RATE = 0.0001
     K_NEIGHBORS = 2
@@ -72,7 +72,7 @@ def main():
                 "image_size": IMG_SIZE,
                 "mixed_precision": True,
                 "weight decay": False,
-                "indices_file": "Eyepacs_val_indices_same_label",
+                "indices_file": "Eyepacs_train_indices_RETFOUND_dinov2",
             },
         )
         run_name = logger.name or "FSFM_Run"
@@ -139,7 +139,9 @@ def main():
     # We check the internal dimension the UNet expects for time embeddings
     time_embed_dim = model.time_embed[-1].out_features
     model.label_emb = nn.Sequential(  # type: ignore
-        nn.Linear(512, time_embed_dim),  # type: ignore
+        # nn.Linear(512, time_embed_dim),  # type: ignore
+        # NOTE: FOR DINOV2 EMBEDDINGS
+        nn.Linear(1024, time_embed_dim),  # type: ignore
         nn.SiLU(),
         nn.Linear(time_embed_dim, time_embed_dim),  # type: ignore
     ).to(device)
@@ -276,6 +278,12 @@ def main():
                 model_to_save = model.module if hasattr(model, "module") else model
                 best_model = copy.deepcopy(model_to_save.state_dict())  # type: ignore
                 print(f"  --> New Best Model! (Val Loss: {best_loss:.4f})")
+
+            if epoch % 100 == 0:
+                if best_model is not None:
+                    model_filename = f"model_best_{run_name}_{epoch}.pth"
+                    save_path = os.path.join(savedir, model_filename)
+                    torch.save(best_model, save_path)
 
     print("\nTraining complete.")
 

@@ -52,7 +52,8 @@ if __name__ == "__main__":
 
     folders_with_models = [
         # "models/19_Feb_Eyepacs_DDP/",
-        "models/19_Feb_Eyepacs_dominant_weight"
+        # "models/19_Feb_Eyepacs_dominant_weight"
+        "models/20_Feb_Eyepacs_dominant_weight"
         # "models/19_Feb_Eyepacs_DDP/",
         # "models/19_Feb_Eyepacs_DDP/",
         # "models/18_Feb_Eyepacs_DDP",
@@ -62,7 +63,8 @@ if __name__ == "__main__":
 
     models_to_evaluate = [
         # "model_360.pth"
-        "model_460.pth",
+        # "model_460.pth",
+        "model_410.pth",
         # "model_90.pth",
         # "model_110.pth",
         # "model_120.pth",
@@ -72,7 +74,7 @@ if __name__ == "__main__":
 
     experiments_dir = [
         # "model_360_gs_studies"
-        "model_460_gs_studies"
+        "model_410_gs_studies"
         # "model_90_gs_studies",
         # "model_110_gs_studies",
         # "model_120_gs_studies",
@@ -83,9 +85,10 @@ if __name__ == "__main__":
     # --- Params ---
     BATCH_SIZE = 50
     K_NEIGHBORS = 2
-    N_SAMPLES = 10  # Columns per row (Diversity)
+    N_SAMPLES = 5  # Columns per row (Diversity)
     # GUIDANCE_SCALES = [0, 1, 3, 5, 7, 10, 15, 20, 30, 50]
-    GUIDANCE_SCALES = [0, 0.2, 0.5, 0.8, 1, 1.2, 1.5, 2, 2.2, 2.5]
+    # GUIDANCE_SCALES = [0, 0.2, 0.5, 0.8, 1, 1.2, 1.5, 2, 2.2, 2.5]
+    GUIDANCE_SCALES = [0, 0.5, 1, 1.5, 2, 2.5, 3]
     # GUIDANCE_SCALES = [1]
 
     NUM_PATIENTS_TO_EVALUATE = 1  # How many different anchors to generate grids for
@@ -209,7 +212,7 @@ if __name__ == "__main__":
 
             # --- 4. Save Grid ---
             final_grid_tensor = torch.cat(grid_rows, dim=0)
-            save_path = os.path.join(experiment_dir, f"{filename}_GS_study_fixed.png")
+            save_path = os.path.join(experiment_dir, f"{filename}_GS_study_all.png")
 
             save_image(
                 final_grid_tensor,

@@ -40,7 +40,7 @@ def get_fsfm_condition(
         if normalised:
             # 2. MATCH TRAINING: Un-normalize from [-1, 1] back to [0, 1]
             # (Since your MessidorDataset outputs [-1, 1] for Flow Matching)
-            # x_input = (x_input + 1.0) / 2.0
+            x_input = (x_input + 1.0) / 2.0
 
             # 3. MATCH TRAINING: Apply ImageNet Normalization
             x_input = TF.normalize(x_input, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])

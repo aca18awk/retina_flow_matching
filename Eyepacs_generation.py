@@ -56,7 +56,7 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
         k=K_NEIGHBORS,
         ensure_same_label=True,
         return_components=True,
-        normalised=False,
+        normalised=True,
     )
 
     random_indices = torch.arange(batch_size)
@@ -155,8 +155,8 @@ if __name__ == "__main__":
     # --- Setup Directories ---
     # Update this to where you want to save the results
 
-    savedir = "models/19_Feb_Eyepacs_DDP/"
-    experiment_dir = os.path.join(savedir, "simulation_GS_1.5_same_class_model_400")
+    savedir = "models/20_Feb_Eyepacs_dominant_weight/"
+    experiment_dir = os.path.join(savedir, "simulation_GS_1.5_same_class_model_410")
     os.makedirs(experiment_dir, exist_ok=True)
 
     # --- Params ---
@@ -202,7 +202,7 @@ if __name__ == "__main__":
     ).to(device)
 
     # --- Load Weights ---
-    model_path = os.path.join(savedir, "model_400.pth")
+    model_path = os.path.join(savedir, "model_410.pth")
 
     if os.path.exists(model_path):
         print(f"Loading weights from {model_path}...")

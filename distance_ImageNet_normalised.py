@@ -1,8 +1,11 @@
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 from Eyepacs_class_for_distance import EyepacsDataset
+from Messidor_class import MessidorDataset
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
@@ -38,7 +41,7 @@ def extract_all_features_and_labels(loader, encoder):
 
     for batch in tqdm(loader):
         imgs = batch[0].to(DEVICE)
-        labels = batch[-1]
+        labels = batch[1]
 
         # Un-normalize from [-1, 1] back to [0, 1]
         imgs = imgs * 0.5 + 0.5
@@ -91,13 +94,25 @@ def find_neighbors(all_features, all_labels, k=10, chunk_size=1000, same_label=T
     return torch.cat(all_indices, dim=0)
 
 
-if __name__ == "__main__":
-    # --- EASY TOGGLE ---
-    SPLIT = "train"
-    SAME_LABEL = False
+def generate_ImageNet_Embeddings(
+    SPLIT, datasetName, SAME_LABEL, useRetFoundPreprocessing, savedir=""
+):
+    if datasetName == "EYEPACS":
+        dataset = EyepacsDataset(
+            purpose=SPLIT,
+            img_size=224,
+            useRetFoundPreprocessing=useRetFoundPreprocessing,
+        )
+    else:
+        dataset = MessidorDataset(
+            purpose=SPLIT,
+            root_dir="/vol/biomedic3/awk24/datasets/Messidor2_256",
+            csv_path="/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv",
+            img_size=224,
+            useRetFoundPreprocessing=useRetFoundPreprocessing,
+        )
 
     # 1. Setup Data
-    dataset = EyepacsDataset(purpose=SPLIT, img_size=128)
     loader = DataLoader(dataset, batch_size=128, shuffle=False, num_workers=4)
 
     # 2. Extract
@@ -105,7 +120,11 @@ if __name__ == "__main__":
     all_features, all_labels = extract_all_features_and_labels(loader, encoder)
 
     # 3. Find Neighbors based on split
-    if SPLIT == "train":
+    if SPLIT == "validation" and datasetName == "EYEPACS":
+        neighbor_indices = find_neighbors(
+            all_features, all_labels, k=K_NEIGHBORS, chunk_size=CHUNK_SIZE, same_label=False
+        )
+    else:
         neighbor_indices = find_neighbors(
             all_features,
             all_labels,
@@ -113,13 +132,26 @@ if __name__ == "__main__":
             chunk_size=CHUNK_SIZE,
             same_label=SAME_LABEL,
         )
-    else:
-        neighbor_indices = find_neighbors(
-            all_features, all_labels, k=K_NEIGHBORS, chunk_size=CHUNK_SIZE, same_label=False
-        )
 
     # 4. Save dynamically based on split name
+    postFix = "_RetFoundPreprocessing" if useRetFoundPreprocessing else ""
+    label = "_same_label" if SAME_LABEL else ""
     print(f"Saving {all_features.shape} features and indices...")
-    torch.save(all_features, f"Eyepacs_{SPLIT}_features_ImageNet.pt")
-    torch.save(neighbor_indices, f"Eyepacs_{SPLIT}_indices_ImageNet.pt")
+    # torch.save(all_features, f"{datasetName}_{SPLIT}_features_ImageNet{label}{postFix}.pt")
+    # torch.save(neighbor_indices, f"{datasetName}_{SPLIT}_indices_ImageNet{label}{postFix}.pt")
+
+    feat_name = f"features_ImageNet{label}{postFix}.pt"
+    idx_name = f"indices_ImageNet{label}{postFix}.pt"
+
+    torch.save(all_features, os.path.join(savedir, feat_name))
+    torch.save(neighbor_indices, os.path.join(savedir, idx_name))
     print("Done!")
+
+
+if __name__ == "__main__":
+    datasetName = "Messidor"
+    SPLIT = "hidden"
+    useRetFoundPreprocessing = False
+    SAME_LABEL = False
+
+    generate_ImageNet_Embeddings(SPLIT, datasetName, SAME_LABEL, useRetFoundPreprocessing)

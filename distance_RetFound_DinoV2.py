@@ -1,3 +1,6 @@
+import os
+
+import pandas as pd
 import timm
 import torch
 import torch.nn as nn
@@ -104,6 +107,7 @@ def extract_all_features_domain_specific(loader, encoder, useRetFoundPreprocessi
         # RETFOUND DOESNT DO THAT!
         norm_feats = F.normalize(raw_feats, p=2, dim=1)
         features_list.append(norm_feats.cpu())
+        # features_list.append(norm_feats.cpu())
 
     return torch.cat(features_list, dim=0)
 
@@ -132,12 +136,112 @@ def find_neighbors_label_free(all_features, k=10, chunk_size=1000):
     return torch.cat(all_indices, dim=0)
 
 
-if __name__ == "__main__":
-    SPLIT = "validation"
+def compare_with_original_retfoud():
+    dataset = "MESSIDOR"
     useRetFoundPreprocessing = True
-    dataset = "EYEPACS"
 
     if dataset == "EYEPACS":
+        data_path = "/vol/biomedic3/awk24/datasets/EYEPACS_256/train"
+        csv_path = "/vol/biomedic3/awk24/code/RETFound/Feature.csv"
+        exact_dataset = EyepacsDataset(
+            purpose="train",
+            img_size=224,
+            useRetFoundPreprocessing=useRetFoundPreprocessing,
+        )
+    else:
+        data_path = "/vol/biomedic3/awk24/datasets/Messidor2_256/hidden_classifier_data"
+        csv_path = "/vol/biomedic3/awk24/code/RETFound/hospital_b_hidden_dino_fixed.csv"
+        exact_dataset = MessidorDataset(
+            purpose="hidden",
+            root_dir="/vol/biomedic3/awk24/datasets/Messidor2_256",
+            csv_path="/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv",
+            img_size=224,
+            useRetFoundPreprocessing=useRetFoundPreprocessing,
+        )
+
+    # --- 1. Load the original RETFound features ---
+    print(f"Loading reference features from: {csv_path}")
+    df = pd.read_csv(csv_path)
+    useRetFoundPreprocessing = True
+
+    image_names = df["name"].values.tolist()
+    reference_features = torch.tensor(df.drop(columns=["name"]).values, dtype=torch.float32)
+
+    # --- 2. Load your custom timm encoder ---
+    encoder = get_retfound_encoder()
+    encoder.eval()
+
+    exact_dataset.image_paths = [os.path.join(data_path, name) for name in image_names]
+    exact_loader = DataLoader(exact_dataset, batch_size=10, shuffle=False)
+
+    # --- 4. Extract features BYPASSING the transforms ---
+    print("\nExtracting features using strict NumPy inputs...")
+    custom_features = extract_all_features_domain_specific(
+        exact_loader,
+        encoder,
+        useRetFoundPreprocessing=useRetFoundPreprocessing,
+    )
+
+    # --- 5. Compare the Tensors ---
+    print("\n" + "=" * 40)
+    print("STRICT NUMPY COMPARISON RESULTS:")
+
+    diff = torch.abs(reference_features - custom_features)
+    max_diff = diff.max().item()
+    mean_diff = diff.mean().item()
+
+    print(f"Shape of Reference: {reference_features.shape}")
+    print(f"Shape of Custom:    {custom_features.shape}")
+    print(f"Max Absolute Error:  {max_diff:.8f}")
+    print(f"Mean Absolute Error: {mean_diff:.8f}")
+
+    # A tiny tolerance (1e-5) accounts for standard float32 GPU vs CPU rounding
+    if torch.allclose(reference_features, custom_features, atol=1e-5):
+        print("✅ SUCCESS! The timm model is a mathematically perfect match.")
+    else:
+        print("⚠️ NOTE: Differences still detected. Check your checkpoint path.")
+    print("=" * 40 + "\n")
+
+    # --- 3. Run k-NN on both sets ---
+    TEST_K = 3
+    print("\nCalculating Reference Neighbors...")
+    ref_indices = find_neighbors_label_free(reference_features, k=TEST_K, chunk_size=10)
+
+    print("Calculating Custom Neighbors...")
+    custom_indices = find_neighbors_label_free(custom_features, k=TEST_K, chunk_size=10)
+
+    # --- 4. Compare the Neighborhoods ---
+    print("\n" + "=" * 50)
+    print("NEAREST NEIGHBOR GEOMETRY TEST (k=3)")
+    print("=" * 50)
+
+    match_count = 0
+    total_queries = len(image_names)
+
+    for i in range(total_queries):
+        ref_nns = ref_indices[i].tolist()
+        cust_nns = custom_indices[i].tolist()
+
+        if set(ref_nns) == set(cust_nns):
+            match_count += 1
+            status = "✅ MATCH"
+        else:
+            status = "❌ MISMATCH"
+
+        print(f"Image {i:02d} | Ref NNs: {ref_nns} | Custom NNs: {cust_nns} | {status}")
+
+    print("-" * 50)
+    print(f"Total Matches: {match_count} / {total_queries}")
+
+    if match_count == total_queries:
+        print("CONCLUSION: The geometry is perfectly preserved!")
+    else:
+        print("CONCLUSION: The PyTorch preprocessing shifted the local neighborhoods.")
+    print("=" * 50 + "\n")
+
+
+def generate_DINO_embeddings(SPLIT, datasetName, useRetFoundPreprocessing, savedir=""):
+    if datasetName == "EYEPACS":
         dataset = EyepacsDataset(
             purpose=SPLIT,
             img_size=224,
@@ -145,7 +249,7 @@ if __name__ == "__main__":
         )
     else:
         dataset = MessidorDataset(
-            purpose="hospital_b",
+            purpose=SPLIT,
             root_dir="/vol/biomedic3/awk24/datasets/Messidor2_256",
             csv_path="/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv",
             img_size=224,
@@ -165,6 +269,23 @@ if __name__ == "__main__":
     )
 
     print(f"Saving {all_features.shape} features and indices...")
-    torch.save(all_features, f"{dataset}_{SPLIT}_features_RETFOUND_dinov2.pt")
-    torch.save(neighbor_indices, f"{dataset}_{SPLIT}_indices_RETFOUND_dinov2.pt")
+    postFix = "_RetFoundPreprocessing" if useRetFoundPreprocessing else ""
+    # torch.save(all_features, f"{datasetName}_{SPLIT}_features_RETFOUND_dinov2{postFix}.pt")
+    # torch.save(neighbor_indices, f"{datasetName}_{SPLIT}_indices_RETFOUND_dinov2{postFix}.pt")
+
+    feat_name = f"features_dinov2{postFix}.pt"
+    idx_name = f"indices_dinov2{postFix}.pt"
+
+    torch.save(all_features, os.path.join(savedir, feat_name))
+    torch.save(neighbor_indices, os.path.join(savedir, idx_name))
     print("Done!")
+
+
+if __name__ == "__main__":
+    # compare_with_original_retfoud()
+
+    SPLIT = "hidden"
+    useRetFoundPreprocessing = False
+    datasetName = "EYEPACS"
+
+    generate_DINO_embeddings(SPLIT, datasetName, useRetFoundPreprocessing)

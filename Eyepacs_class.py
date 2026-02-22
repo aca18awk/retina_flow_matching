@@ -119,18 +119,18 @@ class EyepacsDataset(Dataset):
         # or update the path to load them from 'base_path' if you move them too.
         if purpose == "train":
             self.features = load(
-                "Eyepacs_vectors/Eyepacs_train_features_class_restricted.pt", map_location="cpu"
+                "Eyepacs_vectors/Eyepacs_train_features_RETFOUND_dinov2.pt", map_location="cpu"
             )
             self.indices = load(
-                "Eyepacs_vectors/Eyepacs_train_indices_class_restricted.pt", map_location="cpu"
+                "Eyepacs_vectors/Eyepacs_train_indices_RETFOUND_dinov2.pt", map_location="cpu"
             )
         else:
             self.features = load(
-                "Eyepacs_vectors/Eyepacs_validation_features_class_restricted.pt",
+                "Eyepacs_vectors/Eyepacs_validation_features_RETFOUND_dinov2.pt",
                 map_location="cpu",
             )
             self.indices = load(
-                "Eyepacs_vectors/Eyepacs_validation_indices_class_restricted.pt",
+                "Eyepacs_vectors/Eyepacs_validation_indices_RETFOUND_dinov2.pt",
                 map_location="cpu",
             )
 

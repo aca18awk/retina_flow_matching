@@ -241,22 +241,16 @@ def compare_with_original_retfoud():
     print("=" * 50 + "\n")
 
 
-if __name__ == "__main__":
-    # compare_with_original_retfoud()
-
-    SPLIT = "train"
-    useRetFoundPreprocessing = True
-    dataset = "EYEPACS"
-
-    if dataset == "EYEPACS":
+def generate_MAE_embeddings(SPLIT, datasetName, useRetFoundPreprocessing, savedir=""):
+    if datasetName == "EYEPACS":
         exact_dataset = EyepacsDataset(
             purpose=SPLIT,
             img_size=224,
             useRetFoundPreprocessing=useRetFoundPreprocessing,
         )
     else:
-        dataset = MessidorDataset(
-            purpose="hospital_b",
+        exact_dataset = MessidorDataset(
+            purpose=SPLIT,
             root_dir="/vol/biomedic3/awk24/datasets/Messidor2_256",
             csv_path="/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv",
             img_size=224,
@@ -275,6 +269,24 @@ if __name__ == "__main__":
     neighbor_indices = find_neighbors(all_features, k=K_NEIGHBORS, chunk_size=CHUNK_SIZE)
 
     print(f"Saving {all_features.shape} features and indices...")
-    torch.save(all_features, f"{dataset}_{SPLIT}_features_RETFOUND_MAE_orgPreprocessing.pt")
-    torch.save(neighbor_indices, f"{dataset}_{SPLIT}_indices_RETFOUND_MAE_orgPreprocessing.pt")
+    postFix = "_RetFoundPreprocessing" if useRetFoundPreprocessing else ""
+    # torch.save(all_features, f"{savedir}{datasetName}_{SPLIT}_features_RETFOUND_MAE{postFix}.pt")
+    # torch.save(
+    #     neighbor_indices, f"{savedir}{datasetName}_{SPLIT}_indices_RETFOUND_MAE{postFix}.pt"
+    # )
+
+    feat_name = f"features_MAE{postFix}.pt"
+    idx_name = f"indices_MAE{postFix}.pt"
+
+    torch.save(all_features, os.path.join(savedir, feat_name))
+    torch.save(neighbor_indices, os.path.join(savedir, idx_name))
     print("Done!")
+
+
+if __name__ == "__main__":
+    # compare_with_original_retfoud()
+
+    SPLIT = "hidden"
+    useRetFoundPreprocessing = False
+    datasetName = "Messidor"
+    generate_MAE_embeddings(SPLIT, datasetName, useRetFoundPreprocessing)

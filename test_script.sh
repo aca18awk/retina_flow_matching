@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH -p gpus48
+#SBATCH -p gpus
 #SBATCH --gres gpu:1
-#SBATCH --nodelist loki
+#SBATCH --nodelist lory
 #SBATCH --output=run_logs/train_slurm.%N.%j.log
 
 source /vol/biomedic3/awk24/miniconda3/bin/activate
@@ -25,7 +25,10 @@ export OPENAI_LOGDIR="/vol/biomedic3/awk24/code/conditional-flow-matching/exampl
 # python Eyepacs_train_multiple_gpus.py
 # python Eyepacs_experiment_guidance_scale.py
 # python Eyepacs_generation.py
-python ditances_same_label.py
+# python ditances_same_label.py
+# python Eyepacs_assess_feature_embeddings_2.py
+# python Eyepacs_feature_extraction_retFound.py
+
 
 
 # python Messidor_tsne.py
@@ -33,3 +36,9 @@ python ditances_same_label.py
 # python Messidor_real.py
 # python distances.py
 # python Messidor_FID.py
+# python messidor_feature_test.py
+# python Messidr_weights_classifier.py
+# python Messidor_test_dino.py
+# python Messidor_classifier_on_dino_binary.py
+# python Eyepacs_dist_ImageNet_normalised.py
+python distance_RetFound_DinoV2.py
