@@ -2,6 +2,7 @@ import os
 from typing import Literal
 
 import pandas as pd
+from Eyepacs_class_for_distance import RETFoundTransform
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -17,6 +18,7 @@ class MessidorDataset(Dataset):
         root_dir: str = "/vol/biomedic3/awk24/datasets/Messidor2_256",
         csv_path: str = "/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv",
         img_size=128,
+        useRetFoundPreprocessing=False,
     ):
         """
         Args:
@@ -28,6 +30,7 @@ class MessidorDataset(Dataset):
         self.image_paths = []
         self.labels = {}
         self.img_size = img_size
+        self.useRetFoundPreprocessing = useRetFoundPreprocessing
 
         # 1. Select Subfolder based on Purpose
         if purpose == "hospital_b":
@@ -85,6 +88,7 @@ class MessidorDataset(Dataset):
                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
             ]
         )
+        self.retfound_transform = RETFoundTransform(img_size=img_size)
 
     def __len__(self):
         return len(self.image_paths)
@@ -93,16 +97,12 @@ class MessidorDataset(Dataset):
         img_path = self.image_paths[index]
         filename = os.path.basename(img_path)
 
-        # 1. Load Image
-        try:
-            image = Image.open(img_path).convert("RGB")
-        except Exception as e:
-            print(f"Error loading {img_path}: {e}")
-            # Return black image if failed
-            image = Image.new("RGB", (256, 256))
+        image = Image.open(img_path).convert("RGB")
 
-        # 2. Apply Transform (ToTensor + Normalize)
-        image = self.transform(image)
+        if self.useRetFoundPreprocessing:
+            image = self.retfound_transform(image)
+        else:
+            image = self.transform(image)
 
         # 3. Retrieve Label
         label_data = {}

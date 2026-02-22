@@ -2,12 +2,13 @@ import csv
 import os
 from typing import List, Literal, Optional
 
+import cv2
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 import torchvision.utils as vutils
 from PIL import Image
-from torch import cat, distributions, ones, randperm, stack
+from torch import stack
 from torch.utils.data import Dataset
 from torchvision import transforms
 
@@ -15,6 +16,37 @@ DatasetSplit = Literal["test", "train", "validation"]
 
 # Default fallback (only used if no root is provided)
 DEFAULT_ROOT_PATH = "/vol/biomedic3/awk24/datasets/EYEPACS_256"
+
+
+class RETFoundTransform:
+    """
+    Wraps the exact PIL resizing and NumPy population standard deviation
+    math used by the original RETFound authors into a PyTorch transform.
+    """
+
+    def __init__(self, img_size=224):
+        self.img_size = img_size
+
+    def __call__(self, img):
+        # 1. PIL Resize
+        img = img.resize((self.img_size, self.img_size))
+
+        # 2. NumPy Conversion and [0, 1] scaling
+        img_np = np.array(img) / 255.0
+
+        # 3. Exact NumPy Population Std (ddof=0)
+        for c in range(3):
+            mean = img_np[..., c].mean()
+            std = img_np[..., c].std()
+            if std > 0:
+                img_np[..., c] = (img_np[..., c] - mean) / std
+            else:
+                img_np[..., c] = img_np[..., c] - mean
+
+        # 4. To PyTorch Tensor (CHW format)
+        x = torch.tensor(img_np, dtype=torch.float32)
+        x = torch.einsum("hwc->chw", x)
+        return x
 
 
 class PadToSquare:
@@ -92,6 +124,39 @@ class CropToFundus:
         return img.crop((real_cmin, real_rmin, real_cmax, real_rmax))
 
 
+class BenGrahamPreprocessing:
+    """
+    Applies Ben Graham's color normalization and a strict circular mask.
+    This was the winning preprocessing step in the Kaggle DR competition.
+    """
+
+    def __init__(self, sigmaX=10):
+        self.sigmaX = sigmaX
+
+    def __call__(self, img):
+        # Convert PIL to cv2 numpy array (RGB)
+        img_np = np.array(img)
+
+        # 1. Apply Ben Graham's Local Average Subtraction
+        blurred = cv2.GaussianBlur(img_np, (0, 0), self.sigmaX)
+        # Formula: image*4 - blurred*4 + 128 (maps average to gray)
+        img_graham = cv2.addWeighted(img_np, 4, blurred, -4, 128)
+
+        # 2. Apply a strict circular mask to ensure uniform black borders
+        h, w, _ = img_graham.shape
+        center = (w // 2, h // 2)
+        radius = min(center[0], center[1])
+
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(mask, center, radius, 1, thickness=-1)
+
+        # Mask the image (sets everything outside the circle to pure black)
+        img_masked = cv2.bitwise_and(img_graham, img_graham, mask=mask)
+
+        # Convert back to PIL
+        return Image.fromarray(img_masked)
+
+
 class EyepacsDataset(Dataset):
     def __init__(
         self,
@@ -100,11 +165,13 @@ class EyepacsDataset(Dataset):
         purpose: DatasetSplit = "train",
         img_size=128,
         k_neighbours=3,
+        useRetFoundPreprocessing=False,
     ):
         self.purpose = purpose
+        self.useRetFoundPreprocessing = useRetFoundPreprocessing
         self.image_paths: List[str] = []
         self.k_neighbours = k_neighbours
-        self.labels_map = {}  # <--- NEW: Dictionary to store image -> level mappings
+        self.labels_map = {}
 
         # --- 0. Load Labels from CSV ---
         if os.path.exists(csv_path):
@@ -126,9 +193,6 @@ class EyepacsDataset(Dataset):
             folder_name = "validation"
 
         data_path = os.path.join(base_path, folder_name)
-
-        self.features = None
-        self.indices = None
 
         # --- 2. File Collection ---
         valid_extensions = {".jpg", ".jpeg", ".png"}
@@ -158,6 +222,7 @@ class EyepacsDataset(Dataset):
         # --- 4. Pipeline Definitions ---
         self.pre_process = transforms.Compose(
             [
+                # BenGrahamPreprocessing(),
                 transforms.Resize([img_size, img_size]),
             ]
         )
@@ -166,54 +231,27 @@ class EyepacsDataset(Dataset):
             [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
         )
 
+        self.retfound_transform = RETFoundTransform(img_size=img_size)
+
     def __len__(self):
         return len(self.image_paths)
 
     def __getitem__(self, index):
         img_path = self.image_paths[index]
 
-        # --- NEW: Extract Label ---
         # Get filename without extension (e.g., "13_right" from "13_right.png")
         img_name = os.path.splitext(os.path.basename(img_path))[0]
         # Look up label, default to -1 if missing
         label = self.labels_map.get(img_name, -1)
         label_tensor = torch.tensor(label, dtype=torch.long)
 
-        try:
-            image = Image.open(img_path).convert("RGB")
-        except Exception as e:
-            print(f"Error loading image {img_path}: {e}")
-            image = Image.new("RGB", (128, 128))
+        image = Image.open(img_path).convert("RGB")
+        if self.useRetFoundPreprocessing:
+            image = self.retfound_transform(image)
+        else:
+            image = self.pre_process(image)
+            image = self.to_tensor_norm(image)
 
-        # 1. Base Preprocessing (Crop -> Pad -> Resize)
-        image = self.pre_process(image)
-
-        # 2. Convert to Tensor
-        image = self.to_tensor_norm(image)
-
-        # 3. Dynamic Barycentric Sampling
-        if self.features is not None and self.indices is not None:
-            neighbor_idxs = self.indices[index]
-            num_neighbors_to_sample = self.k_neighbours
-
-            if len(neighbor_idxs) < num_neighbors_to_sample:
-                num_neighbors_to_sample = len(neighbor_idxs)
-
-            perm = randperm(len(neighbor_idxs))[:num_neighbors_to_sample]
-            selected_neighbor_idxs = neighbor_idxs[perm]
-
-            self_feat = self.features[index].unsqueeze(0)
-            neighbor_feats = self.features[selected_neighbor_idxs]
-
-            vectors = cat([self_feat, neighbor_feats], dim=0)
-
-            weights = distributions.Dirichlet(ones(len(vectors))).sample()
-            condition = (vectors * weights.unsqueeze(1)).sum(dim=0)
-
-            # --- NEW: Return image, condition AND label ---
-            return image, condition, label_tensor
-
-        # --- NEW: Return image AND label ---
         return image, label_tensor
 
 
@@ -251,7 +289,7 @@ if __name__ == "__main__":
     print("--- Loading Train ---")
     train_ds = EyepacsDataset(purpose="train")
 
-    save_preview(train_ds, "preview_train_cropToFundus_PadToSquare_final.png")
+    save_preview(train_ds, "preview_train_BenGrahamPreprocessing_final.png")
 
     if len(train_ds) > 0:
         item = train_ds[0]
