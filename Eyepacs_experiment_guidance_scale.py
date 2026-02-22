@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 
 # --- Imports ---
-from get_fsfm_condition import get_fsfm_condition
 from Messidor_class import MessidorDataset
 from torch.distributions import Exponential
 from torch.utils.data import DataLoader
@@ -15,6 +14,8 @@ from torchcfm.models.unet import UNetModel
 
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
+
+FEATURE_FILE = "embeddings/Messidor/hospital_b/features_dinov2.pt"
 
 
 def generate_row(model, x0, cond_batch, null_cond_batch, guidance_scale):
@@ -51,9 +52,11 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(SEED)
 
     folders_with_models = [
+        # "models/21_Feb_Eyepacs_dinov3_no_labels/",
+        "models/21_Feb_Eyepacs_dinov3_no_labels/",
         # "models/19_Feb_Eyepacs_DDP/",
         # "models/19_Feb_Eyepacs_dominant_weight"
-        "models/20_Feb_Eyepacs_dominant_weight"
+        # "models/20_Feb_Eyepacs_dominant_weight"
         # "models/19_Feb_Eyepacs_DDP/",
         # "models/19_Feb_Eyepacs_DDP/",
         # "models/18_Feb_Eyepacs_DDP",
@@ -62,9 +65,11 @@ if __name__ == "__main__":
     ]
 
     models_to_evaluate = [
+        # "model_390.pth",
+        "model_best_dauntless-tree-26.pth",
         # "model_360.pth"
         # "model_460.pth",
-        "model_410.pth",
+        # "model_410.pth",
         # "model_90.pth",
         # "model_110.pth",
         # "model_120.pth",
@@ -73,8 +78,10 @@ if __name__ == "__main__":
     ]
 
     experiments_dir = [
+        # "model_390_gs_studies",
+        "model_best_gs_studies",
         # "model_360_gs_studies"
-        "model_410_gs_studies"
+        # "model_410_gs_studies"
         # "model_90_gs_studies",
         # "model_110_gs_studies",
         # "model_120_gs_studies",
@@ -88,8 +95,8 @@ if __name__ == "__main__":
     N_SAMPLES = 5  # Columns per row (Diversity)
     # GUIDANCE_SCALES = [0, 1, 3, 5, 7, 10, 15, 20, 30, 50]
     # GUIDANCE_SCALES = [0, 0.2, 0.5, 0.8, 1, 1.2, 1.5, 2, 2.2, 2.5]
-    GUIDANCE_SCALES = [0, 0.5, 1, 1.5, 2, 2.5, 3]
-    # GUIDANCE_SCALES = [1]
+    GUIDANCE_SCALES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 5]
+    # GUIDANCE_SCALES = [1.5]
 
     NUM_PATIENTS_TO_EVALUATE = 1  # How many different anchors to generate grids for
 
@@ -117,18 +124,35 @@ if __name__ == "__main__":
     val_batch = val_batch.to(device)
     val_labels = val_labels.to(device)
 
-    # Resize strictly for ResNet Feature Extractor
-    val_batch_resized = torch.nn.functional.interpolate(
-        val_batch, size=(224, 224), mode="bilinear", align_corners=False
-    )
-    z_gathered, valid_masks, all_neighbor_indices = get_fsfm_condition(
-        val_batch_resized,
-        labels=val_labels,
-        k=K_NEIGHBORS,
-        ensure_same_label=True,
-        return_components=True,
-        normalised=True,
-    )
+    # # Resize strictly for ResNet Feature Extractor
+    # val_batch_resized = torch.nn.functional.interpolate(
+    #     val_batch, size=(224, 224), mode="bilinear", align_corners=False
+    # )
+    # z_gathered, valid_masks, all_neighbor_indices = get_fsfm_condition(
+    #     val_batch_resized,
+    #     labels=val_labels,
+    #     k=K_NEIGHBORS,
+    #     ensure_same_label=True,
+    #     return_components=True,
+    #     normalised=True,
+    # )
+
+    # --- MINIMAL CHANGE 1: Load .pt files and group neighbors inline ---
+    print(f"Loading pre-computed features from {FEATURE_FILE}...")
+    z = torch.load(FEATURE_FILE, map_location=device)
+
+    # Recreate the exact K-NN grouping geometry
+    dist = torch.cdist(z, z)
+    label_match_mask = val_labels.unsqueeze(0) == val_labels.unsqueeze(1)
+    dist = dist.masked_fill(~label_match_mask, float("inf"))
+
+    # Find K_NEIGHBORS + 1 (since the anchor itself is included at distance 0)
+    actual_k = min(K_NEIGHBORS + 1, z.shape[0])
+    dists, all_neighbor_indices = torch.topk(dist, k=actual_k, largest=False)
+
+    z_gathered = z[all_neighbor_indices]
+    valid_masks = (dists != float("inf")).float().unsqueeze(-1)
+    feature_dim = z.shape[-1]  # Grabs 1024 for DINOv2, or 512 for ResNet
 
     for m_idx in range(len(folders_with_models)):
         savedir = folders_with_models[m_idx]
@@ -149,8 +173,10 @@ if __name__ == "__main__":
         ).to(device)
 
         time_embed_dim = model.time_embed[-1].out_features
+
+        # --- Dynamic input dimension (512 -> feature_dim) ---
         model.label_emb = nn.Sequential(  # type: ignore
-            nn.Linear(512, time_embed_dim),  # type: ignore
+            nn.Linear(feature_dim, time_embed_dim),  # type: ignore
             nn.SiLU(),
             nn.Linear(time_embed_dim, time_embed_dim),  # type: ignore
         ).to(device)
@@ -158,7 +184,7 @@ if __name__ == "__main__":
         if os.path.exists(model_path):
             model.load_state_dict(torch.load(model_path, map_location=device))
         else:
-            print("Model missing!")
+            print(f"Model missing at {model_path}!")
             continue
 
         model.eval()
@@ -172,21 +198,22 @@ if __name__ == "__main__":
             print(f"\nProcessing Patient: {filename} (Class {val_labels[anchor_idx].item()})")
 
             # --- 1. Build Row 1 (References & Padding) ---
-            anchor_img = val_batch[anchor_idx].unsqueeze(0)
             neighbor_imgs = val_batch[all_neighbor_indices[anchor_idx]]
 
             # Pad the rest of the row with white squares (1s) so it aligns with N_SAMPLES columns
             pad_count = N_SAMPLES - 1 - K_NEIGHBORS
             white_pad = torch.ones(pad_count, 3, IMG_SIZE, IMG_SIZE).to(device)
 
-            ref_row = torch.cat([neighbor_imgs, white_pad], dim=0)  # Shape: [10, 3, 128, 128]
+            ref_row = torch.cat(
+                [neighbor_imgs, white_pad], dim=0
+            )  # Shape: [N_SAMPLES, 3, 128, 128]
             grid_rows = [ref_row]
 
             # --- 2. Create FIXED Condition & Noise for this Patient ---
             anchor_feats = z_gathered[anchor_idx]
             anchor_mask = valid_masks[anchor_idx].squeeze(-1)
 
-            # Sample 10 different neighbor weightings for diversity
+            # Sample N_SAMPLES different neighbor weightings for diversity
             raw_weights = (
                 Exponential(torch.tensor(1.0))
                 .sample((N_SAMPLES, anchor_feats.shape[0]))
@@ -206,7 +233,6 @@ if __name__ == "__main__":
             # --- 3. Iterate Guidance Scales ---
             for gs in GUIDANCE_SCALES:
                 print(f"  Generating GS = {gs}...")
-                # Call the cleanly separated function
                 gen_imgs = generate_row(model, x0, cond_batch, null_cond_batch, guidance_scale=gs)
                 grid_rows.append(gen_imgs)
 
@@ -217,7 +243,7 @@ if __name__ == "__main__":
             save_image(
                 final_grid_tensor,
                 save_path,
-                nrow=N_SAMPLES,  # Exactly 10 columns
+                nrow=N_SAMPLES,
                 normalize=True,
                 value_range=(-1, 1),
                 padding=2,
