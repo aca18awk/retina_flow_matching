@@ -5,8 +5,8 @@ from distance_RetFound_DinoV2 import generate_DINO_embeddings
 from distance_RetFound_MAE import generate_MAE_embeddings
 
 if __name__ == "__main__":
-    SPLIT = "hidden"
-    datasetName = "Messidor"
+    SPLIT = "train"
+    datasetName = "EYEPACS"
 
     savedir = f"embeddings/{datasetName}/{SPLIT}"
     os.makedirs(savedir, exist_ok=True)

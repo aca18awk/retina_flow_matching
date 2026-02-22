@@ -19,8 +19,11 @@ FEATURE_FILES = {
     "ImageNet_same_class": "Eyepacs_vectors/Eyepacs_train_features_class_restricted.pt",
     "ImageNet_correct": "Eyepacs_vectors/Eyepacs_train_features_ImageNet.pt",
     "RETFOUND_Dinov2_preprocessed": "Eyepacs_vectors/Eyepacs_train_features_RETFOUND_dinov2_preprocessed.pt",
-    "RETFOUND_MAE": "Eyepacs_vectors/Eyepacs_train_features_RETFOUND_fixed_2.pt",
+    "RETFOUND_MAE_old": "Eyepacs_vectors/Eyepacs_train_features_RETFOUND_fixed_2.pt",
     "RETFOUND_MAE_original_retfound": "Eyepacs_vectors/EYEPACS_train_features_RETFOUND_MAE_orgPreprocessing.pt",
+    "RETFOUND_MAE_our_processing": "Eyepacs_vectors/EYEPACS_train_features_RETFOUND_MAE.pt",
+    "dinov2_OURPreprocessing": "Eyepacs_vectors/EYEPACS_hidden_features_RETFOUND_dinov2_OURPreprocessing.pt",
+    "dinov2_theirpreprocessing": "Eyepacs_vectors/EYEPACS_hidden_features_RETFOUND_dinov2_orgPreprocessing.pt",
 }
 
 

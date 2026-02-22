@@ -1,4 +1,7 @@
+import os
+
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
@@ -138,31 +141,76 @@ def evaluate_features(
 
 
 def get_true_labels(dataset):
-    """Quickly loop through the dataset to extract the true DR grades."""
+    """Quickly loop through the dataset to extract true DR grades and names."""
     print("Fetching ground truth labels from dataset...")
     loader = DataLoader(dataset, batch_size=256, shuffle=False, num_workers=4)
 
     labels_list = []
+    name_to_label = {}
+
     for batch in tqdm(loader):
+        # Messidor yields: image, label, imagename
         labels = batch[1]
+        names = batch[2]
+
         labels_list.append(labels.cpu())
 
-    return torch.cat(labels_list, dim=0).numpy()
+        # Build the lookup dictionary
+        for name, label in zip(names, labels):
+            # Clean up the name (e.g., "/path/image1.jpg" -> "image1")
+            clean_name = os.path.splitext(os.path.basename(name))[0]
+            name_to_label[clean_name] = label.item()
+
+    native_labels_array = torch.cat(labels_list, dim=0).numpy()
+    return native_labels_array, name_to_label
 
 
 if __name__ == "__main__":
     dataset = MessidorDataset(purpose="hidden", img_size=224)
-    y = get_true_labels(dataset)
 
-    our_features = "Messidor_validation_features_RETFOUND_dinov2.pt"
-    name = "Our_dinoV2"
+    # Get both the native ordered labels and the lookup dictionary
+    y_native, name_to_label = get_true_labels(dataset)
 
-    X = torch.load(our_features, map_location="cpu").numpy()
+    # ---------------------------------------------------------
+    # 1. Evaluate YOUR features (.pt file matches native order)
+    # ---------------------------------------------------------
+    our_features_path = "Messidor_hidden_features_RETFOUND_dinov2.pt"
+    name_ours = "Our_dinoV2"
 
-    evaluate_features(name, X, y)
+    print(f"\nLoading {our_features_path}...")
+    X_ours = torch.load(our_features_path, map_location="cpu").numpy()
+    evaluate_features(name_ours, X_ours, y_native)
 
+    path2 = "Messidor_hidden_features_RETFOUND_dinov2_orgPreprocessing.pt"
+    name_2 = "dinoV2 with RETFound preprocessing"
+
+    print(f"\nLoading {path2}...")
+    X_ours = torch.load(path2, map_location="cpu").numpy()
+    evaluate_features(name_2, X_ours, y_native)
+
+    # ---------------------------------------------------------
+    # 2. Evaluate REFERENCE features (CSV order needs matching)
+    # ---------------------------------------------------------
     csv_path = "/vol/biomedic3/awk24/code/RETFound/hospital_b_hidden_dino_fixed.csv"
+    print(f"\nLoading {csv_path}...")
     df = pd.read_csv(csv_path)
-    reference_features = torch.tensor(df.drop(columns=["name"]).values, dtype=torch.float32)
 
-    evaluate_features("original_dinoV2", reference_features, y)
+    # Extract features from CSV
+    reference_features = torch.tensor(
+        df.drop(columns=["name"]).values, dtype=torch.float32
+    ).numpy()
+
+    # Build the correctly ordered label array for the CSV
+    y_csv = []
+    for csv_name in df["name"]:
+        clean_csv_name = os.path.splitext(os.path.basename(csv_name))[0]
+
+        if clean_csv_name in name_to_label:
+            y_csv.append(name_to_label[clean_csv_name])
+        else:
+            print(f"⚠️ WARNING: {csv_name} from CSV not found in Dataset. Labeling as -1.")
+            y_csv.append(-1)
+
+    y_csv = np.array(y_csv)
+
+    evaluate_features("original_dinoV2", reference_features, y_csv)
