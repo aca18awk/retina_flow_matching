@@ -85,11 +85,10 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
         anchor_feats = z_gathered[anchor_idx]
         anchor_mask = valid_masks[anchor_idx].squeeze(-1)
 
-        # --- DYNAMIC SAMPLING ---
         n_samples = 20
 
-        # Sample weights from Dirichlet/Exponential to mix neighbors
-        # This creates the "Condition" (z) for the flow matching
+        # --- Barycentric Sampling ---
+        # Sample weights from Dirichlet/Exponential
         raw_weights = (
             Exponential(torch.tensor(1.0)).sample((n_samples, anchor_feats.shape[0])).to(device)
         )

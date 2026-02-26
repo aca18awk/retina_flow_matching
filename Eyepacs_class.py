@@ -207,9 +207,6 @@ class EyepacsDataset(Dataset):
 
             vectors = cat([self_feat, neighbor_feats], dim=0)
 
-            # Fix: Ensure Dirichlet has correct shape based on actual neighbors found
-            # weights = distributions.Dirichlet(ones(len(vectors))).sample()
-
             # 1. Sample the main image weight uniformly from [0.5, 0.9]
             w_main = empty(1).uniform_(0.5, 0.9)
 
