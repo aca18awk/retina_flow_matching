@@ -30,10 +30,10 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 
 ### Qualitative & Quantitative Results
 
-| Real Data | Average Sampling | Barycentric Sampling |
+| Real Data | Average Sampling, GS=3 | Barycentric Sampling, GS=3 |
 | --- | --- | --- |
 | <img src="assets/grid_41_real_data.png" width="250px"> | <img src="assets/grid_41_same_label_3.png" width="250px"> | <img src="assets/grid_41_same_label_3_barycentric.png" width="250px"> |
-| *Diversity: 0.054* | *Diversity: 0.027* | *Diversity: 0.036* |
+| *Diversity: 0.047* | *Diversity: 0.016* | *Diversity: 0.024* |
 
 *Figure: Barycentric sampling successfully captures more diversity (e.g., adding/removing dashes, altering thickness) while maintaining structural integrity.*
 
@@ -121,16 +121,16 @@ python distance_generate_ALL_embeddings.py
 
 *Comparison of embedding quality (Class accuracies represent model Recall).*
 
-| Embedding Method | Bal. Acc. ⬆ | QWK ⬆ | Class 0 | Class 1 | Class 2 | Class 3 | Class 4 |
+| Embedding Method | Bal. Acc. | QWK | Class 0 | Class 1 | Class 2 | Class 3 | Class 4 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Source Domain: EyePacs Training Data** | | | | | | | |
+| **Source Domain: EyePacs (N=35,126)** | | | | | | | |
 | ImageNet | 42.36% | 0.31 | 0.45 | **0.38** | 0.30 | **0.49** | 0.58 |
 | ImageNet (Same Label) | 42.36% | 0.30 | 0.45 | **0.38** | 0.30 | **0.49** | 0.58 |
 | MAE | 50.74% | 0.42 | 0.54 | 0.36 | 0.43 | 0.45 | **0.68** |
 | MAE - RetFound preproc. | 48.86% | 0.40 | 0.51 | 0.35 | 0.43 | 0.40 | 0.62 |
 | **DINOv2** | **55.32%** | **0.50** | **0.58** | 0.37 | **0.51** | 0.46 | 0.63 |
 | DINOv2 - RetFound preproc. | 52.46% | 0.46 | 0.55 | 0.35 | 0.48 | 0.47 | 0.61 |
-| **Target Domain: `hospital_b` + generated embeddings. Split (N=1050)** | | | | | | | |
+| **Target Domain: `hospital_b` + generated embeddings (N=1050)** | | | | | | | |
 | *No barycentric sampling* | | | | | | | |
 | ImageNet | 31.50% | 0.1242 | 0.34 | 0.23 | 0.28 | 0.38 | **0.50** |
 | ImageNet (Same label) | 31.50% | 0.1242 | 0.34 | 0.23 | 0.28 | 0.38 | **0.50** |
