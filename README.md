@@ -4,6 +4,9 @@
 > Code repository for the paper: *"Few-Shot Flow Matching with Stochastic
 Barycentric Sampling for Image Synthesis"*
 
+<p align="center">
+<img src="assets/diagram.png" width="600px">
+
 This repository contains the PyTorch implementation of **Few-Shot Flow Matching (FSFM)**. FSFM is a generative adaptation framework that bridges extreme data-scarce regimes in medical imaging. By leveraging a frozen, label-free pre-trained prior and Stochastic Barycentric Sampling, FSFM adapts to novel local target domains using as few as 50 anchor images.
 
 ---
@@ -27,36 +30,6 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 ---
 
 ## 🔴🟢🔵 Colored MNIST (CM)
-
-<!-- ### Qualitative & Quantitative Results -->
-
-| Real Data | Average Sampling, GS=3 | Barycentric Sampling, GS=3 |
-| --- | --- | --- |
-| <img src="assets/grid_41_real_data.png" width="250px"> | <img src="assets/grid_41_same_label_3.png" width="250px"> | <img src="assets/grid_41_same_label_3_barycentric.png" width="250px"> |
-| *Diversity: 0.047* | *Diversity: 0.016* | *Diversity: 0.024* |
-
-<!-- *Figure: Barycentric sampling successfully captures more diversity (e.g., adding/removing dashes, altering thickness) while maintaining structural integrity.*
-
-*(GS = Guidance Scale)*
-
-| Conditioning Strategy | Colour Acc. | Digit Acc. | Fidelity | Diversity |
-| --- | --- | --- | --- | --- |
-| Unconditional (Lower Bound) | 35.40% | 10.00% | 0.141 | 0.144 |
-| Real Data (Upper Bound) | 100.00% | 99.02% | 0.048 | 0.047 |
-| Average (GS=3, Any Label) | 100.00% | 75.96% | 0.029 | 0.019 |
-| Average (GS=1, Same Label) | 100.00% | 91.88% | 0.032 | 0.032 |
-| Average (GS=2, Same Label) | 100.00% | **97.22%** | 0.028 | 0.020 |
-| **Barycentric (GS=2, Same Label)** | 100.00% | 95.60% | **0.030** | **0.027** |
-| Average (GS=3, Same Label) | 100.00% | **98.38%** | 0.026 | 0.016 |
-| **Barycentric (GS=3, Same Label)** | 100.00% | 96.90% | **0.029** | **0.024** |
-| Average (GS=5, Same Label) | 100.00% | 98.94% | 0.026 | 0.012 |
-| Average (GS=7, Same Label) | 100.00% | 98.86% | 0.026 | 0.011 |
-
---- -->
-<!-- 
-
-* **Manifold Projection:** When conditioned on out-of-distribution (OOD) "Purple" digits, the model safely projected the OOD embedding onto the nearest valid region of the learned manifold without hallucinating artifacts.
-* **Sampling Diversity:** Barycentric sampling captures significantly higher diversity compared to standard average sampling. -->
 
 ### Code Structure & Execution
 
@@ -123,34 +96,6 @@ python distance_generate_ALL_embeddings.py
 * `distance_generate_ALL_embeddings.py`: Master script that utilizes `distance_ImageNet.py`, `distance_RetFound_DinoV2.py`, and `distance_RetFound_MAE.py` to generate embeddings. Outputs `.pt` files required for k-NN retrieval.
 * `Eyepacs_class_for_distance.py`: A simplified dataloader utilized strictly for rapid embedding calculations.
 * `assess_features.py`: Trains a linear classifier on the generated embeddings to assess latent space robustness.
-<!-- 
-*Comparison of embedding quality (Class accuracies represent model Recall).*
-
-| Embedding Method | Bal. Acc. | QWK | Class 0 | Class 1 | Class 2 | Class 3 | Class 4 |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Source Domain: EyePacs (N=35,126)** | | | | | | | |
-| ImageNet | 42.36% | 0.31 | 0.45 | **0.38** | 0.30 | **0.49** | 0.58 |
-| ImageNet (Same Label) | 42.36% | 0.30 | 0.45 | **0.38** | 0.30 | **0.49** | 0.58 |
-| MAE | 50.74% | 0.42 | 0.54 | 0.36 | 0.43 | 0.45 | **0.68** |
-| MAE - RetFound preproc. | 48.86% | 0.40 | 0.51 | 0.35 | 0.43 | 0.40 | 0.62 |
-| **DINOv2** | **55.32%** | **0.50** | **0.58** | 0.37 | **0.51** | 0.46 | 0.63 |
-| DINOv2 - RetFound preproc. | 52.46% | 0.46 | 0.55 | 0.35 | 0.48 | 0.47 | 0.61 |
-| **Target Domain: `hospital_b` + generated embeddings (N=1050)** | | | | | | | |
-| *No barycentric sampling* | | | | | | | |
-| ImageNet | 31.50% | 0.1242 | 0.34 | 0.23 | 0.28 | 0.38 | **0.50** |
-| ImageNet (Same label) | 31.50% | 0.1242 | 0.34 | 0.23 | 0.28 | 0.38 | **0.50** |
-| RETFound (MAE) | 42.33% | 0.3041 | **0.56** | 0.31 | 0.15 | 0.31 | **0.50** |
-| **RETFound (DINOv2)** | **43.33%** | **0.5052** | 0.49 | **0.37** | **0.23** | **0.72** | **0.50** |
-| *With barycentric sampling* | | | | | | | |
-| ImageNet | 33.83% | 0.1538 | 0.37 | 0.25 | **0.29** | 0.41 | 0.50 |
-| ImageNet (Same Label) | 33.67% | 0.1488 | 0.37 | 0.25 | 0.28 | 0.41 | 0.50 |
-| RETFound (MAE) | 44.50% | 0.3729 | **0.60** | 0.30 | 0.14 | 0.31 | **0.60** |
-| **RETFound (DINOv2)** | **44.67%** | **0.5181** | 0.51 | **0.40** | 0.21 | **0.76** | 0.50 |
-| **Target Domain: `hidden_data` (N=800)** | | | | | | | |
-| ImageNet | 52.00% | 0.4417 | 0.66 | 0.29 | 0.39 | 0.28 | 0.10 |
-| ImageNet (Same label) | 53.50% | 0.4417 | 0.66 | 0.29 | 0.39 | 0.28 | 0.10 |
-| RETFound (MAE) | 57.17% | 0.5438 | 0.72 | 0.23 | 0.48 | 0.41 | **0.50** |
-| **RETFound (DINOv2)** | **63.17%** | **0.6050** | **0.79** | **0.27** | **0.54** | **0.52** | 0.30 | -->
 
 ### 3. Phase 1: Label-Free Pre-Training
 
