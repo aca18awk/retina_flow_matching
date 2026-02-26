@@ -21,6 +21,7 @@ conda activate fsfm_env
 # Install dependencies from the requirements file
 pip install -r requirements.txt --extra-index-url [https://download.pytorch.org/whl/cu113](https://download.pytorch.org/whl/cu113)
 
+```
 ---
 
 ## 🔴🟢🔵 Colored MNIST
