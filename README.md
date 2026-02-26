@@ -1,7 +1,8 @@
-# Few-Shot Flow Matching (FSFM) for Retinal Image Adaptation
+# Few-Shot Flow Matching with Stochastic Barycentric Sampling for Image Synthesis
 
 > **Anonymous Submission for MICCAI 2026**
-> Code repository for the paper: *"Few-Shot Flow Matching with Barycentric Sampling for Image Synthesis"*
+> Code repository for the paper: *"Few-Shot Flow Matching with Stochastic
+Barycentric Sampling for Image Synthesis"*
 
 This repository contains the PyTorch implementation of **Few-Shot Flow Matching (FSFM)**. FSFM is a generative adaptation framework that bridges extreme data-scarce regimes in medical imaging. By leveraging a frozen, label-free pre-trained prior and Stochastic Barycentric Sampling, FSFM adapts to novel local target domains using as few as 50 anchor images.
 
@@ -11,7 +12,7 @@ This repository contains the PyTorch implementation of **Few-Shot Flow Matching 
 
 Our flow matching implementation is built upon the foundational work provided in the [conditional-flow-matching](https://github.com/atong01/conditional-flow-matching) repository. Please ensure you follow their base environment guidelines if you encounter any OS-specific compilation issues.
 
-To ensure reproducibility, we provide a `requirements.txt` mapping our working environment 
+To ensure reproducibility, we provide a `requirements.txt` mapping our working environment.
 
 ```bash
 # Create and activate the conda environment
@@ -19,28 +20,22 @@ conda create -n fsfm_env python=3.10
 conda activate fsfm_env
 
 # Install dependencies from the requirements file
-pip install -r requirements.txt --extra-index-url [https://download.pytorch.org/whl/cu113](https://download.pytorch.org/whl/cu113)
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu113
 
 ```
+
 ---
 
-## 🔴🟢🔵 Colored MNIST
+## 🔴🟢🔵 Colored MNIST (CM)
 
-To evaluate robustness to anomalous anchors, we tested FSFM on a Coloured MNIST task.
+<!-- ### Qualitative & Quantitative Results -->
 
-* **Manifold Projection:** When conditioned on out-of-distribution (OOD) "Purple" digits, the model safely projected the OOD embedding onto the nearest valid region of the learned manifold without hallucinating artifacts.
-* **Sampling Diversity:** Barycentric sampling captures significantly higher diversity compared to standard average sampling.
-
-### Qualitative Results
-
-| Real Data | Average Sampling | Barycentric Sampling |
+| Real Data | Average Sampling, GS=3 | Barycentric Sampling, GS=3 |
 | --- | --- | --- |
 | <img src="assets/grid_41_real_data.png" width="250px"> | <img src="assets/grid_41_same_label_3.png" width="250px"> | <img src="assets/grid_41_same_label_3_barycentric.png" width="250px"> |
-| *Diversity: 0.054* | *Diversity: 0.027* | *Diversity: 0.036* |
+| *Diversity: 0.047* | *Diversity: 0.016* | *Diversity: 0.024* |
 
-*Figure: Barycentric sampling successfully captures more diversity (e.g., adding/removing dashes, altering thickness) while maintaining structural integrity.*
-
-### Quantitative Evaluation
+ *Figure: Barycentric sampling successfully captures more diversity (e.g., adding/removing dashes, altering thickness) while maintaining structural integrity.*
 
 *(GS = Guidance Scale)*
 
@@ -49,18 +44,43 @@ To evaluate robustness to anomalous anchors, we tested FSFM on a Coloured MNIST 
 | Unconditional (Lower Bound) | 35.40% | 10.00% | 0.141 | 0.144 |
 | Real Data (Upper Bound) | 100.00% | 99.02% | 0.048 | 0.047 |
 | Average (GS=3, Any Label) | 100.00% | 75.96% | 0.029 | 0.019 |
-| Average (GS=3, Same Label) | 100.00% | **98.38%** | 0.026 | 0.016 |
-| **Barycentric (GS=3, Same Label)** | 100.00% | 96.90% | **0.029** | **0.024** |
+| Average (GS=1, Same Label) | 100.00% | 91.88% | 0.032 | 0.032 |
 | Average (GS=2, Same Label) | 100.00% | **97.22%** | 0.028 | 0.020 |
 | **Barycentric (GS=2, Same Label)** | 100.00% | 95.60% | **0.030** | **0.027** |
+| Average (GS=3, Same Label) | 100.00% | **98.38%** | 0.026 | 0.016 |
+| **Barycentric (GS=3, Same Label)** | 100.00% | 96.90% | **0.029** | **0.024** |
+| Average (GS=5, Same Label) | 100.00% | 98.94% | 0.026 | 0.012 |
+| Average (GS=7, Same Label) | 100.00% | 98.86% | 0.026 | 0.011 |
 
-### Code Execution
+---
 
-To train the Coloured MNIST model, execute `CM_train.py`. The dataset will download automatically.
+* **Manifold Projection:** When conditioned on out-of-distribution (OOD) "Purple" digits, the model safely projected the OOD embedding onto the nearest valid region of the learned manifold without hallucinating artifacts.
+* **Sampling Diversity:** Barycentric sampling captures significantly higher diversity compared to standard average sampling.
 
-* To generate images using barycentric sampling: `python CM_generation_barycentric.py`
-* To generate images using average sampling: `python CM_generation_avg.py`
-* For evaluation metrics, run `CM_test_colour.py` and `CM_LPIPS.py`.
+### Code Structure & Execution
+
+**1. Data & Utilities**
+
+* `CM_class.py`: Defines the dataset class for Coloured MNIST.
+* `CM_real.py`: Extracts images from the validation subset and saves them in the same format as generated images to serve as upper-bound comparison data.
+
+**2. Training**
+To train the Coloured MNIST model, execute the main training script. The dataset will download automatically.
+
+* `CM_train.py` / `CM_train_multiple_gpus.py`: Main training loops.
+* `CM_get_fsfm_condition.py`: Takes a batch of images, passes them through a ResNet encoder, and dynamically calculates nearest neighbors on-the-fly during training.
+* `CM_generate_images.py`: Utility for visualising generations during the training phase.
+
+**3. Generation & Sampling**
+
+* `CM_generation_barycentric.py`: Generates images using our proposed Stochastic Barycentric Sampling.
+* `CM_generation_avg.py`: Generates images using standard average sampling (baseline).
+* `CM_experiment_guidance_scale.py`: Generates image grids across different guidance scales for ablation studies.
+
+**4. Evaluation**
+
+* `CM_test_colour.py`: Calculates colour accuracy metrics.
+* `calculate_LPIPS.py`: Computes structural fidelity/diversity metrics.
 
 ---
 
@@ -68,9 +88,12 @@ To train the Coloured MNIST model, execute `CM_train.py`. The dataset will downl
 
 ### 1. Dataset Preparation
 
-Before running the scripts, ensure your source and target datasets are organized in the root directory. Please download [EyePACS](https://www.kaggle.com/c/diabetic-retinopathy-detection) and [MESSIDOR-2](https://www.kaggle.com/datasets/mariaherrerot/messidor2preprocess/data), and update the paths in `Messidor_class.py` and `Eyepacs_class.py` respectively.
+Before running the scripts, ensure your source and target datasets are organized in the root directory. Please download [EyePACS](https://www.kaggle.com/c/diabetic-retinopathy-detection) and [MESSIDOR-2](https://www.kaggle.com/datasets/mariaherrerot/messidor2preprocess/data), and update the paths within the dataset classes.
 
-To save compute time, both datasets were pre-processed and scaled down to 256px offline. FSFM was trained on the train subset of EyePACS. The indices selected for the 50-shot target domain are saved in `hospital_B_file_list.csv`. The Test (600 samples), Validation (200 samples), and Oracle/hidden data (800 samples) were selected at random from the remainder of the dataset.
+* `Eyepacs_class.py`: Defines the EyePACS dataset class.
+* `Messidor_class.py`: Defines the Messidor dataset class.
+* `Messidor_save_dataset.py`: Automatically splits the dataset given the path to the original dataset and target indices.
+* `hospital_B_file_list.csv`: Contains the specific, pre-selected indices for our 50-shot target domain. We ensured the selected indices are representative of the dataset and contain equal splits of each disease class.
 
 Please structure your data as follows:
 
@@ -89,34 +112,29 @@ data/
 
 ### 2. Generating Feature Embeddings
 
-Extract feature embeddings from the source dataset (EyePACS) and the target dataset by executing:
+The quality of the k-NN simplex heavily depends on the frozen feature extractor. Extract feature embeddings from the source dataset (EyePACS) and the target dataset by executing:
 
 ```bash
 python distance_generate_ALL_embeddings.py
 
 ```
 
-*(Adjust the dataset and split parameters within the script to generate embeddings for both datasets).*
+* `distance_generate_ALL_embeddings.py`: Master script that utilizes `distance_ImageNet.py`, `distance_RetFound_DinoV2.py`, and `distance_RetFound_MAE.py` to generate embeddings. Outputs `.pt` files required for k-NN retrieval.
+* `Eyepacs_class_for_distance.py`: A simplified dataloader utilized strictly for rapid embedding calculations.
+* `assess_features.py`: Trains a linear classifier on the generated embeddings to assess latent space robustness.
 
-This outputs `.pt` files containing the structural features and indices required for the k-NN retrieval step. The script automatically generates embeddings using ImageNet, RETFound (pre-trained DINOv2), and MAE. We empirically found that our pre-processing method yields the best results.
+*Comparison of embedding quality (Class accuracies represent model Recall).*
 
-The quality of the k-NN simplex heavily depends on the frozen feature extractor. Under Target Domain evaluation with Barycentric sampling, **DINOv2 (via RETFound)** consistently provided the most robust latent space.
-
-*Detailed Target Domain Performance Breakdown (Class accuracies represent Recall):*
-
-### Detailed Target Domain Performance Breakdown
-*Comparison of embeddings quality. To evaluate the quality of the feature embeddings via linear probing, source domain representations were assessed on a 20% holdout of the EyePACS training data, while target domain performance (hospital_b) was measured by training a linear classifier on 1,050 samples (50 real anchors plus 1,000 generated embeddings) and evaluating on the test set. Class accuracies represent model Recall.*
-
-| Embedding Method | Bal. Acc. ⬆ | QWK ⬆ | Class 0 | Class 1 | Class 2 | Class 3 | Class 4 |
+| Embedding Method | Bal. Acc. | QWK | Class 0 | Class 1 | Class 2 | Class 3 | Class 4 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Source Domain: EyePacs Training Data** | | | | | | | |
+| **Source Domain: EyePacs (N=35,126)** | | | | | | | |
 | ImageNet | 42.36% | 0.31 | 0.45 | **0.38** | 0.30 | **0.49** | 0.58 |
 | ImageNet (Same Label) | 42.36% | 0.30 | 0.45 | **0.38** | 0.30 | **0.49** | 0.58 |
 | MAE | 50.74% | 0.42 | 0.54 | 0.36 | 0.43 | 0.45 | **0.68** |
 | MAE - RetFound preproc. | 48.86% | 0.40 | 0.51 | 0.35 | 0.43 | 0.40 | 0.62 |
 | **DINOv2** | **55.32%** | **0.50** | **0.58** | 0.37 | **0.51** | 0.46 | 0.63 |
 | DINOv2 - RetFound preproc. | 52.46% | 0.46 | 0.55 | 0.35 | 0.48 | 0.47 | 0.61 |
-| **Target Domain: `hospital_b` + generated embeddings. Split (N=1050)** | | | | | | | |
+| **Target Domain: `hospital_b` + generated embeddings (N=1050)** | | | | | | | |
 | *No barycentric sampling* | | | | | | | |
 | ImageNet | 31.50% | 0.1242 | 0.34 | 0.23 | 0.28 | 0.38 | **0.50** |
 | ImageNet (Same label) | 31.50% | 0.1242 | 0.34 | 0.23 | 0.28 | 0.38 | **0.50** |
@@ -131,14 +149,11 @@ The quality of the k-NN simplex heavily depends on the frozen feature extractor.
 | ImageNet | 52.00% | 0.4417 | 0.66 | 0.29 | 0.39 | 0.28 | 0.10 |
 | ImageNet (Same label) | 53.50% | 0.4417 | 0.66 | 0.29 | 0.39 | 0.28 | 0.10 |
 | RETFound (MAE) | 57.17% | 0.5438 | 0.72 | 0.23 | 0.48 | 0.41 | **0.50** |
-| **RETFound (DINOv2)** | **63.17%** | **0.6050** | **0.79** | **0.27** | **0.54** | **0.52** | 0.30 |
-
-
-*Note: Run `assess_features.py` to train a linear regression on the embeddings and generate a similar accuracy report.*
+| **RETFound (DINOv2)** | **63.17%** | **0.6050** | **0.79** | **0.27** | **0.54** | **0.52** | 0.30 | 
 
 ### 3. Phase 1: Label-Free Pre-Training
 
-Train the continuous vector field entirely on unlabelled source data. The conditioning is dynamically calculated using the k-nearest neighbors in the embedding space.
+Train the continuous vector field entirely on unlabelled source data.
 
 ```bash
 # Execute training across multiple GPUs
@@ -148,6 +163,8 @@ python Eyepacs_train_multiple_gpus.py
 bash flow_script.sh
 
 ```
+
+* `Eyepacs_generate_images.py`: Visualisation utility for monitoring the vector field during pre-training.
 
 ### 4. Phase 2: Few-Shot Generation (Barycentric Adaptation)
 
@@ -162,19 +179,21 @@ Using only 50 labeled anchor images from the target domain, we generate diverse 
 <i>Anchor reference compared to its nearest neighbors in the learned manifold.</i>
 </p>
 
-To find the optimal guidance scale for your specific target domain, execute:
+To find the optimal guidance scale (w) for your target domain, execute:
 
 ```bash
 python Eyepacs_experiment_guidance_scale.py 
 
 ```
 
-This generates a grid of images using different guidance scales. Our empirical ablations indicate that a guidance scale of w=1 provides the optimal balance of generative diversity and structural fidelity for downstream classification.
+Once optimal parameters are set, generate the final augmented dataset:
 
-Once optimal parameters are set, execute `Eyepacs_generation.py` to generate the final augmented dataset. Output files will be organized as follows:
+```bash
+python Eyepacs_generation.py
 
-* `main_folder/samples/anchor_filename/` (Contains individual generated `.png` samples)
-* `main_folder/summary/anchor_filename/` (Contains the original anchor, nearest neighbors, and a grid of all generated outputs)
+```
+
+Output files will be organized with samples and summary grids in their respective output directories.
 
 <p align="center">
 <img src="assets/retina_generated_grid.png" width="600px">
@@ -187,23 +206,21 @@ Once optimal parameters are set, execute `Eyepacs_generation.py` to generate the
 
 ### 5. Evaluation & Downstream Classification
 
-Evaluate visual fidelity (FID/LPIPS) and train the ResNet classifiers on the FSFM-augmented datasets.
+Evaluate visual fidelity and prepare for downstream classification.
 
-```bash
-# Calculate FID and LPIPS
-python Messidor_FID.py
-python CM_LPIPS.py
+* `Messidor_FID.py`: Calculates Frechet Inception Distance.
+* `calculate_LPIPS.py`: Calculates LPIPS diversity and fidelity metrics.
+* `Messidor_real_data_for_comparison.py`: Formats and saves real ground-truth data for direct comparison against synthetic outputs.
 
-```
-
-Note on Downstream Classifiers: To maintain strict modularity between the generative pipeline and the clinical evaluation, the downstream ResNet classification framework (including data loaders, training loops, and metrics for Tables 1 & 2) is maintained in a dedicated secondary repository.
+**Note on Downstream Classifiers:** To maintain strict modularity between the generative pipeline and the clinical evaluation, the downstream ResNet classification framework (including data loaders, training loops, and metrics for Tables 1 & 2) is maintained in a dedicated secondary repository.
 
 ---
 
 ## 📄 Reproducibility & Open Science
 
-This repository is submitted strictly for double-blind peer review. To ensure compliance with MICCAI anonymity guidelines, model checkpoints and specific data splits have been temporarily withheld. Upon acceptance, we will release:
+This repository is submitted strictly for double-blind peer review. To ensure compliance with MICCAI anonymity guidelines, model checkpoints have been temporarily withheld. Upon acceptance, we will release:
 
 * Pre-trained Phase 1 model weights.
-* Full setup instructions for the downstream clinical classifiers.
 * The complete secondary classification repository, including all training scripts, validation loops, and downstream evaluation code.
+
+---
