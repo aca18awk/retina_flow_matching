@@ -5,7 +5,7 @@ import torch.nn as nn
 
 # --- Imports from your project structure ---
 from CM_class import ColoredMNIST
-from get_fsfm_condition import get_fsfm_condition
+from CM_get_fsfm_condition import get_fsfm_condition
 from torch.utils.data import DataLoader
 from torchdiffeq import odeint
 from torchvision import transforms

@@ -1,6 +1,6 @@
 import os
 
-from distance_ImageNet_normalised import generate_ImageNet_Embeddings
+from distance_ImageNet import generate_ImageNet_Embeddings
 from distance_RetFound_DinoV2 import generate_DINO_embeddings
 from distance_RetFound_MAE import generate_MAE_embeddings
 

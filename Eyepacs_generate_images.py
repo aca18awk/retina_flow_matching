@@ -33,7 +33,6 @@ def generate_images(
     anchor_imgs = full_imgs[:num_samples]
 
     # The condition is now the semantic vector from the dataset
-    # We DO NOT calculate get_fsfm_condition here anymore
     label = full_conds[:num_samples]
 
     y_uncond = torch.zeros_like(label)

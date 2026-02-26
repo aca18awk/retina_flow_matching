@@ -128,14 +128,6 @@ if __name__ == "__main__":
     # val_batch_resized = torch.nn.functional.interpolate(
     #     val_batch, size=(224, 224), mode="bilinear", align_corners=False
     # )
-    # z_gathered, valid_masks, all_neighbor_indices = get_fsfm_condition(
-    #     val_batch_resized,
-    #     labels=val_labels,
-    #     k=K_NEIGHBORS,
-    #     ensure_same_label=True,
-    #     return_components=True,
-    #     normalised=True,
-    # )
 
     # --- MINIMAL CHANGE 1: Load .pt files and group neighbors inline ---
     print(f"Loading pre-computed features from {FEATURE_FILE}...")

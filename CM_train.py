@@ -7,7 +7,7 @@ import torch.nn as nn
 import wandb
 from CM_class import ColoredMNIST
 from CM_generate_images import generate_images
-from get_fsfm_condition import get_fsfm_condition
+from CM_get_fsfm_condition import get_fsfm_condition
 from torch.nn.utils import clip_grad_norm_  # type: ignore
 from torch.utils.data import DataLoader
 from torchdyn.core import NeuralODE

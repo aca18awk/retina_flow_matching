@@ -1,7 +1,7 @@
 import os
 
 import torch
-from get_fsfm_condition import get_fsfm_condition
+from CM_get_fsfm_condition import get_fsfm_condition
 from torchdiffeq import odeint
 from torchvision.utils import save_image
 

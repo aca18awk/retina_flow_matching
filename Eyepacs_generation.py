@@ -44,22 +44,6 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
 
     print(f"Loaded batch of size {batch_size}. Calculating components...")
 
-    # 2. Get Raw Components (Features & Neighbors)
-    # Note: get_fsfm_condition needs to handle 256x256 images.
-    # Ideally, it extracts features (e.g. ResNet) internally.
-    # val_batch_resized = torch.nn.functional.interpolate(
-    #     val_batch, size=(224, 224), mode="bilinear", align_corners=False
-    # )
-
-    # z_gathered, valid_masks, all_neighbor_indices = get_fsfm_condition(
-    #     val_batch_resized,
-    #     labels=val_labels,
-    #     k=K_NEIGHBORS,
-    #     ensure_same_label=True,
-    #     return_components=True,
-    #     normalised=True,
-    # )
-
     z = torch.load(FEATURE_FILE, map_location=device)
 
     dist = torch.cdist(z, z)
