@@ -44,10 +44,15 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 | Unconditional (Lower Bound) | 35.40% | 10.00% | 0.141 | 0.144 |
 | Real Data (Upper Bound) | 100.00% | 99.02% | 0.048 | 0.047 |
 | Average (GS=3, Any Label) | 100.00% | 75.96% | 0.029 | 0.019 |
-| Average (GS=3, Same Label) | 100.00% | **98.38%** | 0.026 | 0.016 |
-| **Barycentric (GS=3, Same Label)** | 100.00% | 96.90% | **0.029** | **0.024** |
+| Average (GS=1, Same Label) | 100.00% | 91.88% | 0.032 | 0.032 |
 | Average (GS=2, Same Label) | 100.00% | **97.22%** | 0.028 | 0.020 |
 | **Barycentric (GS=2, Same Label)** | 100.00% | 95.60% | **0.030** | **0.027** |
+| Average (GS=3, Same Label) | 100.00% | **98.38%** | 0.026 | 0.016 |
+| **Barycentric (GS=3, Same Label)** | 100.00% | 96.90% | **0.029** | **0.024** |
+| Average (GS=5, Same Label) | 100.00% | 98.94% | 0.026 | 0.012 |
+| Average (GS=7, Same Label) | 100.00% | 98.86% | 0.026 | 0.011 |
+
+---
 
 
 * **Manifold Projection:** When conditioned on out-of-distribution (OOD) "Purple" digits, the model safely projected the OOD embedding onto the nearest valid region of the learned manifold without hallucinating artifacts.
