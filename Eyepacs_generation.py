@@ -2,8 +2,6 @@ import os
 
 import torch
 import torch.nn as nn
-
-# --- Imports from your project structure ---
 from Messidor_class import MessidorDataset
 from torch.distributions import Exponential
 from torch.utils.data import DataLoader
@@ -150,8 +148,6 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(SEED)
 
     # --- Setup Directories ---
-    # Update this to where you want to save the results
-
     savedir = "models/21_Feb_Eyepacs_dinov3_no_labels/"
     experiment_dir = os.path.join(savedir, "simulation_GS_1.5_same_class_model_best")
     os.makedirs(experiment_dir, exist_ok=True)

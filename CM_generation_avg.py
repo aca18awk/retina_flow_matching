@@ -2,8 +2,6 @@ import os
 
 import torch
 import torch.nn as nn
-
-# --- Imports from your project structure ---
 from CM_class import ColoredMNIST
 from CM_get_fsfm_condition import get_fsfm_condition
 from torch.utils.data import DataLoader
@@ -33,9 +31,8 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
     summary_folder_root = os.path.join(savedir, "summary")
     os.makedirs(summary_folder_root, exist_ok=True)
 
-    # Replace the existing batch loading lines with this:
     try:
-        val_batch, val_labels = next(iter(val_loader))  # Capture labels here
+        val_batch, val_labels = next(iter(val_loader))
     except StopIteration:
         print("Loader is empty!")
         return
@@ -55,16 +52,6 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
         val_batch, labels=val_labels, k=K_NEIGHBORS, return_neigh=True, ensure_same_label=True
     )
 
-    # 2. Pick 10 random indices from this batch to serve as anchors
-    # num_anchors = 5
-    # if batch_size < num_anchors:
-    #     random_indices = torch.arange(batch_size)
-    # else:
-    #     # Fix seed for reproducibility of anchor selection
-    #     g_cpu = torch.Generator()
-    #     g_cpu.manual_seed(42)
-    #     random_indices = torch.randperm(batch_size, generator=g_cpu)[:num_anchors]
-
     random_indices = torch.arange(batch_size)
 
     print(f"Generating cohorts for {len(random_indices)} anchors...")
@@ -82,7 +69,6 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
         anchor_idx = idx.item()
 
         # --- Create Folder ---
-        # Folder name: "figs_folder/12"
         sample_folder = os.path.join(sample_folder_root, str(anchor_idx))
         os.makedirs(sample_folder, exist_ok=True)
 
@@ -116,14 +102,11 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
         # (which was formed by averaging its neighbors in the batch)
         anchor_cond = all_conditions[anchor_idx].unsqueeze(0)  # [1, 512]
 
-        # We want to generate 50 samples
         n_samples = 100
 
-        # Repeat condition 50 times
-        cond_batch = anchor_cond.repeat(n_samples, 1)  # [50, 512]
-        null_cond_batch = torch.zeros_like(cond_batch)  # [50, 512]
+        cond_batch = anchor_cond.repeat(n_samples, 1)
+        null_cond_batch = torch.zeros_like(cond_batch)
 
-        # Start Noise for 50 samples
         x0 = torch.randn(n_samples, *val_batch.shape[1:], device=device)
 
         # --- Solve ODE ---
@@ -148,11 +131,10 @@ def generate_cohorts(model, val_loader, K_NEIGHBORS, guidance_scale, savedir):
             save_image(generated_imgs_denorm[i], os.path.join(sample_folder, f"{i}.png"))
 
         # --- Save Grid ---
-        # 5 rows x 10 cols
         grid_img = make_grid(generated_imgs_denorm, nrow=10, padding=2, normalize=False)
         save_image(grid_img, os.path.join(summary_folder, "grid.png"))
 
-        print(f"  Saved Anchor {anchor_idx}: Original + 50 Samples + Grid -> {sample_folder}")
+        print(f"  Saved Anchor {anchor_idx}: Original + Samples + Grid -> {sample_folder}")
 
 
 if __name__ == "__main__":

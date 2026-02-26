@@ -27,11 +27,10 @@ if __name__ == "__main__":
 
     IMG_SIZE = 32
     BATCH_SIZE = 50  # We only need the first 50 anchors
-    N_SAMPLES = 100  # How many real samples to draw per anchor
+    N_SAMPLES = 100
 
     # Paths
     base_savedir = "models/15_Feb_Coloured_MNIST_FSFM_Latent"
-    # We add _REAL to distinguish this from the generative experiment
     experiment_dir = os.path.join(base_savedir, "simulation_blue_REAL")
 
     sample_folder_root = os.path.join(experiment_dir, "samples")

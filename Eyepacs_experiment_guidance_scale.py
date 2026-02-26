@@ -2,8 +2,6 @@ import os
 
 import torch
 import torch.nn as nn
-
-# --- Imports ---
 from Messidor_class import MessidorDataset
 from torch.distributions import Exponential
 from torch.utils.data import DataLoader
@@ -37,8 +35,6 @@ def generate_row(model, x0, cond_batch, null_cond_batch, guidance_scale):
             torch.tensor([0.0, 1.0], device=device),
             atol=1e-4,
             rtol=1e-4,
-            # atol=1e-5,
-            # rtol=1e-5,
             method="dopri5",
         )
 
@@ -51,56 +47,20 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(SEED)
 
-    folders_with_models = [
-        # "models/21_Feb_Eyepacs_dinov3_no_labels/",
-        "models/21_Feb_Eyepacs_dinov3_no_labels/",
-        # "models/19_Feb_Eyepacs_DDP/",
-        # "models/19_Feb_Eyepacs_dominant_weight"
-        # "models/20_Feb_Eyepacs_dominant_weight"
-        # "models/19_Feb_Eyepacs_DDP/",
-        # "models/19_Feb_Eyepacs_DDP/",
-        # "models/18_Feb_Eyepacs_DDP",
-        # "models/18_Feb_Eyepacs_DDP",
-        # "models/18_Feb_Eyepacs_DDP",
-    ]
+    folders_with_models = ["models/21_Feb_Eyepacs_dinov3_no_labels/"]
 
-    models_to_evaluate = [
-        # "model_390.pth",
-        "model_best_dauntless-tree-26.pth",
-        # "model_360.pth"
-        # "model_460.pth",
-        # "model_410.pth",
-        # "model_90.pth",
-        # "model_110.pth",
-        # "model_120.pth",
-        # "model_140.pth",
-        # "model_160.pth",
-    ]
+    models_to_evaluate = ["model_best_dauntless-tree-26.pth"]
 
-    experiments_dir = [
-        # "model_390_gs_studies",
-        "model_best_gs_studies",
-        # "model_360_gs_studies"
-        # "model_410_gs_studies"
-        # "model_90_gs_studies",
-        # "model_110_gs_studies",
-        # "model_120_gs_studies",
-        # "model_140_gs_studies_test",
-        # "model_160_gs_studies",
-    ]
+    experiments_dir = ["model_best_gs_studies"]
 
     # --- Params ---
     BATCH_SIZE = 50
     K_NEIGHBORS = 2
     N_SAMPLES = 5  # Columns per row (Diversity)
-    # GUIDANCE_SCALES = [0, 1, 3, 5, 7, 10, 15, 20, 30, 50]
-    # GUIDANCE_SCALES = [0, 0.2, 0.5, 0.8, 1, 1.2, 1.5, 2, 2.2, 2.5]
-    GUIDANCE_SCALES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 5]
-    # GUIDANCE_SCALES = [1.5]
+    GUIDANCE_SCALES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 5, 10]
 
-    NUM_PATIENTS_TO_EVALUATE = 1  # How many different anchors to generate grids for
+    NUM_PATIENTS_TO_EVALUATE = 1
 
-    # Model Config (Matches 128x128 Messidor Training)
     IMG_SIZE = 128
     NO_OF_CHANNELS_IMG = 3
     CHANNEL_MULT = (1, 2, 4, 8)
@@ -124,12 +84,7 @@ if __name__ == "__main__":
     val_batch = val_batch.to(device)
     val_labels = val_labels.to(device)
 
-    # # Resize strictly for ResNet Feature Extractor
-    # val_batch_resized = torch.nn.functional.interpolate(
-    #     val_batch, size=(224, 224), mode="bilinear", align_corners=False
-    # )
-
-    # --- MINIMAL CHANGE 1: Load .pt files and group neighbors inline ---
+    # Load .pt files and group neighbors inline ---
     print(f"Loading pre-computed features from {FEATURE_FILE}...")
     z = torch.load(FEATURE_FILE, map_location=device)
 
@@ -166,7 +121,7 @@ if __name__ == "__main__":
 
         time_embed_dim = model.time_embed[-1].out_features
 
-        # --- Dynamic input dimension (512 -> feature_dim) ---
+        # --- Dynamic input dimension ---
         model.label_emb = nn.Sequential(  # type: ignore
             nn.Linear(feature_dim, time_embed_dim),  # type: ignore
             nn.SiLU(),

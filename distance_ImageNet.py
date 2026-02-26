@@ -137,8 +137,6 @@ def generate_ImageNet_Embeddings(
     postFix = "_RetFoundPreprocessing" if useRetFoundPreprocessing else ""
     label = "_same_label" if SAME_LABEL else ""
     print(f"Saving {all_features.shape} features and indices...")
-    # torch.save(all_features, f"{datasetName}_{SPLIT}_features_ImageNet{label}{postFix}.pt")
-    # torch.save(neighbor_indices, f"{datasetName}_{SPLIT}_indices_ImageNet{label}{postFix}.pt")
 
     feat_name = f"features_ImageNet{label}{postFix}.pt"
     idx_name = f"indices_ImageNet{label}{postFix}.pt"

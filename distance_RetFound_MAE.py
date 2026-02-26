@@ -101,10 +101,9 @@ def extract_all_features_domain_specific(loader, encoder, useRetFoundPreprocessi
         raw_feats = encoder(imgs)
 
         # L2 Normalize
-        # RETFOUND doesn't do that!
+        # Note: Original RetFound doesn't do that
         norm_feats = F.normalize(raw_feats, p=2, dim=1)
         features_list.append(norm_feats.cpu())
-        # features_list.append(raw_feats.cpu())
 
     return torch.cat(features_list, dim=0)
 
@@ -270,10 +269,6 @@ def generate_MAE_embeddings(SPLIT, datasetName, useRetFoundPreprocessing, savedi
 
     print(f"Saving {all_features.shape} features and indices...")
     postFix = "_RetFoundPreprocessing" if useRetFoundPreprocessing else ""
-    # torch.save(all_features, f"{savedir}{datasetName}_{SPLIT}_features_RETFOUND_MAE{postFix}.pt")
-    # torch.save(
-    #     neighbor_indices, f"{savedir}{datasetName}_{SPLIT}_indices_RETFOUND_MAE{postFix}.pt"
-    # )
 
     feat_name = f"features_MAE{postFix}.pt"
     idx_name = f"indices_MAE{postFix}.pt"

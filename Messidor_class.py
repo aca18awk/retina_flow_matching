@@ -7,7 +7,6 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-# Define valid options for the 'purpose' argument
 MessidorSplit = Literal["hospital_b", "test", "hidden", "validation"]
 
 
@@ -121,9 +120,7 @@ class MessidorDataset(Dataset):
 if __name__ == "__main__":
     # Configuration
     processed_root = "/vol/biomedic3/awk24/datasets/Messidor2_256"
-    csv_file = (
-        "/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv"  # Or messidor_labels.csv
-    )
+    csv_file = "/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv"
 
     print("--- Testing Hospital B Split ---")
     try:

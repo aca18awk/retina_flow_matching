@@ -7,15 +7,12 @@ import torch
 from PIL import Image
 
 # --- Configuration ---
-# 1. Path to your experiment folder (the one containing 0/, 1/, 2/...)
 EXPERIMENT_DIR = (
     "models/15_Feb_Coloured_MNIST_FSFM_Latent/simulation_blue_same_label_3_barycentric/samples"
 )
 
-# 2. What color are we expecting? (options: "red", "green", "blue")
 TARGET_COLOR = "blue"
 
-# --- Setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -36,7 +33,6 @@ def classify_image_color(image_path):
 
         scores = {"red": r_score, "green": g_score, "blue": b_score}
 
-        # Find key with max value
         dominant_color = max(scores, key=scores.get)
         return dominant_color
     except Exception as e:
@@ -73,8 +69,7 @@ def main():
             os.path.join(folder, "*.jpg")
         )
 
-        # Filter out "grid.png" or "original.png" or "reference" images if you only want the generated ones
-        # Assuming generated files are just numbers like "0.png", "1.png"...
+        # Assuming generated files are numbers like "0.png", "1.png"
         # We skip files that contain "grid", "original", "reference"
         image_files = [
             f

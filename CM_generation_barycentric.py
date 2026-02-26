@@ -2,8 +2,6 @@ import os
 
 import torch
 import torch.nn as nn
-
-# --- Imports from your project structure ---
 from CM_class import ColoredMNIST
 from CM_get_fsfm_condition import get_fsfm_condition
 from torch.distributions import Exponential

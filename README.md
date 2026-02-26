@@ -5,7 +5,9 @@
 Barycentric Sampling for Image Synthesis"*
 
 <p align="center">
-<img src="assets/diagram.png" width="600px">
+<img src="assets/diagram.png" width="700px">
+
+
 <i>Architecture diagram</i>
 </p>
 

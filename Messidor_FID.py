@@ -7,10 +7,7 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 from torchvision import transforms
 
 # --- Configuration ---
-# EXPERIMENT_ROOT = "models/18_Feb_Eyepacs_DDP/simulation_GS_1.5_same_class_model_140"
 EXPERIMENT_ROOT = "models/23_Feb_Eyepacs_fixed_dinov2/simulation_GS_1_same_class_model_390"
-# EXPERIMENT_ROOT = "models/18_Feb_Eyepacs_DDP/simulation_GS_1_same_class_model_120"
-# EXPERIMENT_ROOT = "models/18_Feb_Eyepacs_DDP/hidden_class_samples_unique"
 
 
 # Derived Paths
@@ -100,7 +97,7 @@ def main():
         if sample_tensors:
             # Stack into a batch: (N, 3, 299, 299)
             batch_fakes = torch.stack(sample_tensors, dim=0).to(device)
-            # Update fake features
+            # Update features
             fid_metric.update(batch_fakes, real=False)
             total_fakes += len(sample_tensors)
 

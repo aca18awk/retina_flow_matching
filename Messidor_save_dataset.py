@@ -6,10 +6,6 @@ from Messidor_class import MessidorDataset
 from torchvision.utils import save_image
 from tqdm import tqdm
 
-# Import your dataset class
-# Assuming it is in a file named messidor_dataset.py
-# from messidor_dataset import MessidorDataset
-
 # --- Configuration ---
 original_root = "/vol/biomedic3/awk24/datasets/Messidor2"
 csv_labels_path = "/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv"
@@ -85,8 +81,6 @@ if __name__ == "__main__":
 
     count = 0
 
-    # Iterate through the dataset
-    # We wrap in tqdm for a progress bar
     for i in tqdm(range(len(dataset))):
         img_tensor, _, fname = dataset[i]
 
@@ -98,7 +92,6 @@ if __name__ == "__main__":
             # Un-normalize back to [0, 1] range
             img_save = unnormalize(img_tensor)
 
-            # Save
             save_image(img_save, save_path)
             count += 1
 

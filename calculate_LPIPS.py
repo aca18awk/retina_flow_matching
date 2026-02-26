@@ -9,9 +9,7 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from torchvision import transforms
 
 # --- Configuration ---
-# EXPERIMENT_ROOT = "models/18_Feb_Eyepacs_DDP/simulation_GS_1.5_same_class_model_140"
-# EXPERIMENT_ROOT = "models/18_Feb_Eyepacs_DDP/simulation_GS_1.5_same_class_model_120"
-EXPERIMENT_ROOT = "models/18_Feb_Eyepacs_DDP/hidden_class_samples_unique"
+EXPERIMENT_ROOT = "models/23_Feb_Eyepacs_fixed_dinov2/simulation_GS_1_same_class_model_390"
 
 # Derived Paths
 SAMPLES_DIR = os.path.join(EXPERIMENT_ROOT, "samples")
@@ -21,7 +19,6 @@ SUMMARY_DIR = os.path.join(EXPERIMENT_ROOT, "summary")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Initialize LPIPS Metric
-# net_type='alex' is standard for LPIPS, but 'vgg' is also common. 'alex' is faster.
 lpips_metric = LearnedPerceptualImagePatchSimilarity(net_type="alex", normalize=True).to(device)
 
 # LPIPS expects images in [0, 1] or [-1, 1].

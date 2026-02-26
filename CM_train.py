@@ -65,23 +65,11 @@ transform = transforms.Compose(
     [transforms.Resize((IMG_SIZE, IMG_SIZE)), transforms.ToTensor(), normalise]
 )
 
-# train_dataset = datasets.MNIST(
-#     "../../../../datasets/MNIST",
-#     train=True,
-#     download=True,
-#     transform=transform,
-# )
 train_dataset = ColoredMNIST(
     root="../../../../datasets/MNIST", train=True, download=True, transform=transform
 )
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-# val_dataset = datasets.MNIST(
-#     "../../../../datasets/MNIST",
-#     train=False,
-#     download=True,
-#     transform=transform,
-# )
 val_dataset = ColoredMNIST(
     root="../../../../datasets/MNIST", train=False, download=True, transform=transform
 )

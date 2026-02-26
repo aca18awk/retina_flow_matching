@@ -266,15 +266,15 @@ if __name__ == "__main__":
     cached_labels = {}
 
     # Find all dataset folders inside 'embeddings/'
-    # datasets = [d for d in os.listdir(BASE_DIR) if os.path.isdir(os.path.join(BASE_DIR, d))]
-    datasets = ["Messidor"]
+    datasets = [d for d in os.listdir(BASE_DIR) if os.path.isdir(os.path.join(BASE_DIR, d))]
+    # datasets = ["Messidor"]
 
     for dataset_name in datasets:
         dataset_dir = os.path.join(BASE_DIR, dataset_name)
-        # splits = [
-        #     s for s in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, s))
-        # ]
-        splits = ["hospital_b"]
+        splits = [
+            s for s in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, s))
+        ]
+        # splits = ["hospital_b"]
 
         for split in splits:
             split_dir = os.path.join(dataset_dir, split)

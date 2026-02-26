@@ -39,7 +39,7 @@ class InstanceNormalize:
 def get_retfound_encoder():
     print("Loading Domain-Specific Encoder (RETFound DINOv2)...")
 
-    # FIX 1: DINOv2 Architecture, NO global_pool argument here
+    # DINOv2 Architecture, NO global_pool argument here
     model = timm.create_model(
         "vit_large_patch14_dinov2.lvd142m",
         pretrained=False,
@@ -104,10 +104,9 @@ def extract_all_features_domain_specific(loader, encoder, useRetFoundPreprocessi
         raw_feats = ln(pooled_feats)
 
         # 3. Final L2 Normalize for Cosine Similarity distance
-        # RETFOUND DOESNT DO THAT!
+        # Note: original RETFOUND doesn't do that
         norm_feats = F.normalize(raw_feats, p=2, dim=1)
         features_list.append(norm_feats.cpu())
-        # features_list.append(norm_feats.cpu())
 
     return torch.cat(features_list, dim=0)
 
@@ -270,8 +269,6 @@ def generate_DINO_embeddings(SPLIT, datasetName, useRetFoundPreprocessing, saved
 
     print(f"Saving {all_features.shape} features and indices...")
     postFix = "_RetFoundPreprocessing" if useRetFoundPreprocessing else ""
-    # torch.save(all_features, f"{datasetName}_{SPLIT}_features_RETFOUND_dinov2{postFix}.pt")
-    # torch.save(neighbor_indices, f"{datasetName}_{SPLIT}_indices_RETFOUND_dinov2{postFix}.pt")
 
     feat_name = f"features_dinov2{postFix}.pt"
     idx_name = f"indices_dinov2{postFix}.pt"

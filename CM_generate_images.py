@@ -53,16 +53,12 @@ def generate_images(
 
     generated_imgs = traj[-1]  # Final state at t=1
 
-    # 5. Concatenate & Save
-    # combined_images = torch.cat([anchor_imgs, generated_imgs], dim=0)
-
     label_str = "-".join(map(str, anchor_labels))
     save_filename = f"epoch_{epoch}_targets_{label_str}.png"
     save_path = os.path.join(figs_dir, save_filename)
 
     final_images = generated_imgs.clip(-1, 1)
 
-    # Then make the grid
     combined_images = torch.cat([anchor_imgs, final_images], dim=0)
 
     save_image(
@@ -73,5 +69,3 @@ def generate_images(
         value_range=(-1, 1),  # Explicitly tells function that min=-1, max=1
         padding=2,
     )
-
-    # save_image(combined_images, save_path, nrow=8, normalize=True, value_range=(-1, 1))

@@ -14,7 +14,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-# Import your custom modules
 from torchcfm.conditional_flow_matching import TargetConditionalFlowMatcher
 from torchcfm.models.unet import UNetModel
 
@@ -41,6 +40,8 @@ def main():
     # --- Configuration ---
     savedir = "models/21_Feb_Eyepacs_dinov3_no_labels"
     figs_dir = os.path.join(savedir, "figs")
+    # Note: 1024 for DinoV2, 512 for ImageNet
+    FEATURE_DIMENSIONS = 1024
 
     # Hyperparams
     VALIDATION_SEED = 42
@@ -61,7 +62,6 @@ def main():
     run_name = "FSFM_Run"
     if global_rank == 0:
         os.makedirs(figs_dir, exist_ok=True)
-        # WandB only on Rank 0 to prevent 3 separate runs being logged
         logger = wandb.init(
             project="flow_matching_eyepacs",
             config={
@@ -91,14 +91,13 @@ def main():
     dist.barrier()
 
     # Init Dataset (This will load data into RAM on each process)
-    # Since we have 375GB RAM, loading 6GB three times (18GB) is trivial.
     train_dataset = EyepacsDataset(
         root=dataset_loc,
         purpose="train",
         img_size=IMG_SIZE,
         k_neighbours=K_NEIGHBORS,
     )
-    # DDP Sampler (Crucial for splitting data correctly)
+
     train_sampler = DistributedSampler(train_dataset, shuffle=True)
     train_loader = DataLoader(
         train_dataset,
@@ -135,13 +134,10 @@ def main():
         attention_resolutions=ATTENTION_RESOLUTIONS,
     ).to(device)
 
-    # HACK: Replace the embedding layer with a Linear Projection for our 512-dim vector
-    # We check the internal dimension the UNet expects for time embeddings
     time_embed_dim = model.time_embed[-1].out_features
+    # HACK: Replace the embedding layer with a Linear Projection for our feature vector
     model.label_emb = nn.Sequential(  # type: ignore
-        # nn.Linear(512, time_embed_dim),  # type: ignore
-        # NOTE: FOR DINOV2 EMBEDDINGS
-        nn.Linear(1024, time_embed_dim),  # type: ignore
+        nn.Linear(FEATURE_DIMENSIONS, time_embed_dim),  # type: ignore
         nn.SiLU(),
         nn.Linear(time_embed_dim, time_embed_dim),  # type: ignore
     ).to(device)
@@ -149,11 +145,7 @@ def main():
     # DDP Wrapper
     model = DDP(model, device_ids=[local_rank])
 
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=LEARNING_RATE,
-        # weight_decay=1e-5,
-    )
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     scaler = GradScaler()
     FM = TargetConditionalFlowMatcher(sigma=0.0)
 
@@ -161,29 +153,10 @@ def main():
     best_model = None
 
     start_epoch = 0
-    # resume_path = os.path.join(savedir, "model_30.pth")  # Make sure this file exists!
-
-    # if os.path.exists(resume_path):
-    #     # We must use map_location to load correctly on DDP
-    #     checkpoint = torch.load(resume_path, map_location=device)
-
-    #     # Handle the "module." prefix that DDP adds
-    #     # If your saved model has "module.conv..." keys, loading into model.module is redundant
-    #     # But usually, just loading the state_dict works if keys match.
-    #     try:
-    #         model.module.load_state_dict(checkpoint)
-    #     except:
-    #         # Fallback if keys don't match exactly (sometimes DDP adds/removes prefixes)
-    #         model.load_state_dict(checkpoint)
-
-    #     start_epoch = 31  # Skip the first 20
-    #     print(f"[Rank {global_rank}] Resuming from Epoch 20!")
-
-    # print(f"[Rank {global_rank}] Ready to train.")
 
     for epoch in range(start_epoch, N_EPOCHS):
         model.train()
-        train_sampler.set_epoch(epoch)  # Essential for shuffling
+        train_sampler.set_epoch(epoch)
 
         train_avg_loss = []
 
@@ -223,7 +196,7 @@ def main():
             if loss.item() > 0:
                 train_avg_loss.append(loss.item())
 
-        # This averages the loss across all 3 GPUs so WandB shows the TRUE global loss
+        # This averages the loss across all GPUs so WandB shows the TRUE global loss
         local_loss = torch.tensor(np.mean(train_avg_loss), device=device)
         dist.all_reduce(local_loss, op=dist.ReduceOp.SUM)
         epoch_loss = local_loss.item() / world_size
