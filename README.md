@@ -9,15 +9,17 @@ This repository contains the PyTorch implementation of **Few-Shot Flow Matching 
 
 ## ⚙️ Environment Setup & Dependencies
 
-To ensure reproducibility, please install the required dependencies:
+Our flow matching implementation is built upon the foundational work provided in the [conditional-flow-matching](https://github.com/atong01/conditional-flow-matching) repository. Please ensure you follow their base environment guidelines if you encounter any OS-specific compilation issues.
+
+To ensure reproducibility, we provide a `requirements.txt` mapping our working environment 
 
 ```bash
+# Create and activate the conda environment
 conda create -n fsfm_env python=3.10
 conda activate fsfm_env
-pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu118](https://download.pytorch.org/whl/cu118)
-pip install diffusers transformers scipy scikit-learn
 
-```
+# Install dependencies from the requirements file
+pip install -r requirements.txt --extra-index-url [https://download.pytorch.org/whl/cu113](https://download.pytorch.org/whl/cu113)
 
 ---
 
@@ -181,6 +183,8 @@ python CM_LPIPS.py
 
 ```
 
+Note on Downstream Classifiers: To maintain strict modularity between the generative pipeline and the clinical evaluation, the downstream ResNet classification framework (including data loaders, training loops, and metrics for Tables 1 & 2) is maintained in a dedicated secondary repository.
+
 ---
 
 ## 📄 Reproducibility & Open Science
@@ -189,3 +193,4 @@ This repository is submitted strictly for double-blind peer review. To ensure co
 
 * Pre-trained Phase 1 model weights.
 * Full setup instructions for the downstream clinical classifiers.
+* The complete secondary classification repository, including all training scripts, validation loops, and downstream evaluation code.
