@@ -1,4 +1,4 @@
-# Few-Shot Flow Matching (FSFM) for Retinal Image Adaptation
+# Few-Shot Flow Matching (FSFM) for Retinal Image Adaptation - MICCAI BRANCH
 
 > **Anonymous Submission for MICCAI 2026**
 > Code repository for the paper: *"Few-Shot Flow Matching with Barycentric Sampling for Image Synthesis"*
