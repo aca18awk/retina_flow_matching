@@ -6,6 +6,8 @@ Barycentric Sampling for Image Synthesis"*
 
 <p align="center">
 <img src="assets/diagram.png" width="600px">
+<i>Architecture diagram</i>
+</p>
 
 This repository contains the PyTorch implementation of **Few-Shot Flow Matching (FSFM)**. FSFM is a generative adaptation framework that bridges extreme data-scarce regimes in medical imaging. By leveraging a frozen, label-free pre-trained prior and Stochastic Barycentric Sampling, FSFM adapts to novel local target domains using as few as 50 anchor images.
 
