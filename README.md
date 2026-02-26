@@ -104,7 +104,7 @@ The quality of the k-NN simplex heavily depends on the frozen feature extractor.
 *Detailed Target Domain Performance Breakdown (Class accuracies represent Recall):*
 
 ### Detailed Target Domain Performance Breakdown
-*Comparison of representation quality on the source domain (EyePacs), synthetic target generation with and without Barycentric sampling (`hospital_b`), and linear probing on raw target embeddings (`hidden_data`). Class accuracies represent model Recall.*
+*Comparison of embeddings quality. To evaluate the quality of the feature embeddings via linear probing, source domain representations were assessed on a 20% holdout of the EyePACS training data, while target domain performance (hospital_b) was measured by training a linear classifier on 1,050 samples (50 real anchors plus 1,000 generated embeddings) and evaluating on the test set. Class accuracies represent model Recall.*
 
 | Embedding Method | Bal. Acc. ⬆ | QWK ⬆ | Class 0 | Class 1 | Class 2 | Class 3 | Class 4 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -115,7 +115,7 @@ The quality of the k-NN simplex heavily depends on the frozen feature extractor.
 | MAE - RetFound preproc. | 48.86% | 0.40 | 0.51 | 0.35 | 0.43 | 0.40 | 0.62 |
 | **DINOv2** | **55.32%** | **0.50** | **0.58** | 0.37 | **0.51** | 0.46 | 0.63 |
 | DINOv2 - RetFound preproc. | 52.46% | 0.46 | 0.55 | 0.35 | 0.48 | 0.47 | 0.61 |
-| **Target Domain: `hospital_b` Split (N=1050)** | | | | | | | |
+| **Target Domain: `hospital_b` + generated embeddings. Split (N=1050)** | | | | | | | |
 | *No barycentric sampling* | | | | | | | |
 | ImageNet | 31.50% | 0.1242 | 0.34 | 0.23 | 0.28 | 0.38 | **0.50** |
 | ImageNet (Same label) | 31.50% | 0.1242 | 0.34 | 0.23 | 0.28 | 0.38 | **0.50** |
@@ -126,7 +126,7 @@ The quality of the k-NN simplex heavily depends on the frozen feature extractor.
 | ImageNet (Same Label) | 33.67% | 0.1488 | 0.37 | 0.25 | 0.28 | 0.41 | 0.50 |
 | RETFound (MAE) | 44.50% | 0.3729 | **0.60** | 0.30 | 0.14 | 0.31 | **0.60** |
 | **RETFound (DINOv2)** | **44.67%** | **0.5181** | 0.51 | **0.40** | 0.21 | **0.76** | 0.50 |
-| **Target Domain: Linear Probing on `hidden_data` (N=800)** | | | | | | | |
+| **Target Domain: `hidden_data` (N=800)** | | | | | | | |
 | ImageNet | 52.00% | 0.4417 | 0.66 | 0.29 | 0.39 | 0.28 | 0.10 |
 | ImageNet (Same label) | 53.50% | 0.4417 | 0.66 | 0.29 | 0.39 | 0.28 | 0.10 |
 | RETFound (MAE) | 57.17% | 0.5438 | 0.72 | 0.23 | 0.48 | 0.41 | **0.50** |
