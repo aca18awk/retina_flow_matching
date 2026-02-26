@@ -28,14 +28,14 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 
 ## 🔴🟢🔵 Colored MNIST (CM)
 
-### Qualitative & Quantitative Results
+<!-- ### Qualitative & Quantitative Results -->
 
 | Real Data | Average Sampling, GS=3 | Barycentric Sampling, GS=3 |
 | --- | --- | --- |
 | <img src="assets/grid_41_real_data.png" width="250px"> | <img src="assets/grid_41_same_label_3.png" width="250px"> | <img src="assets/grid_41_same_label_3_barycentric.png" width="250px"> |
 | *Diversity: 0.047* | *Diversity: 0.016* | *Diversity: 0.024* |
 
-*Figure: Barycentric sampling successfully captures more diversity (e.g., adding/removing dashes, altering thickness) while maintaining structural integrity.*
+<!-- *Figure: Barycentric sampling successfully captures more diversity (e.g., adding/removing dashes, altering thickness) while maintaining structural integrity.*
 
 *(GS = Guidance Scale)*
 
@@ -52,11 +52,11 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 | Average (GS=5, Same Label) | 100.00% | 98.94% | 0.026 | 0.012 |
 | Average (GS=7, Same Label) | 100.00% | 98.86% | 0.026 | 0.011 |
 
----
-
+--- -->
+<!-- 
 
 * **Manifold Projection:** When conditioned on out-of-distribution (OOD) "Purple" digits, the model safely projected the OOD embedding onto the nearest valid region of the learned manifold without hallucinating artifacts.
-* **Sampling Diversity:** Barycentric sampling captures significantly higher diversity compared to standard average sampling.
+* **Sampling Diversity:** Barycentric sampling captures significantly higher diversity compared to standard average sampling. -->
 
 ### Code Structure & Execution
 
@@ -123,7 +123,7 @@ python distance_generate_ALL_embeddings.py
 * `distance_generate_ALL_embeddings.py`: Master script that utilizes `distance_ImageNet.py`, `distance_RetFound_DinoV2.py`, and `distance_RetFound_MAE.py` to generate embeddings. Outputs `.pt` files required for k-NN retrieval.
 * `Eyepacs_class_for_distance.py`: A simplified dataloader utilized strictly for rapid embedding calculations.
 * `assess_features.py`: Trains a linear classifier on the generated embeddings to assess latent space robustness.
-
+<!-- 
 *Comparison of embedding quality (Class accuracies represent model Recall).*
 
 | Embedding Method | Bal. Acc. | QWK | Class 0 | Class 1 | Class 2 | Class 3 | Class 4 |
@@ -150,7 +150,7 @@ python distance_generate_ALL_embeddings.py
 | ImageNet | 52.00% | 0.4417 | 0.66 | 0.29 | 0.39 | 0.28 | 0.10 |
 | ImageNet (Same label) | 53.50% | 0.4417 | 0.66 | 0.29 | 0.39 | 0.28 | 0.10 |
 | RETFound (MAE) | 57.17% | 0.5438 | 0.72 | 0.23 | 0.48 | 0.41 | **0.50** |
-| **RETFound (DINOv2)** | **63.17%** | **0.6050** | **0.79** | **0.27** | **0.54** | **0.52** | 0.30 |
+| **RETFound (DINOv2)** | **63.17%** | **0.6050** | **0.79** | **0.27** | **0.54** | **0.52** | 0.30 | -->
 
 ### 3. Phase 1: Label-Free Pre-Training
 
