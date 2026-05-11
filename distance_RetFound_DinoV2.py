@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 # --- Configuration ---
 CHUNK_SIZE = 1000
-K_NEIGHBORS = 10
+K_NEIGHBORS = 2
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -112,11 +112,25 @@ def extract_all_features_domain_specific(loader, encoder, useRetFoundPreprocessi
     return torch.cat(features_list, dim=0)
 
 
-def find_neighbors_label_free(all_features, k=10, chunk_size=1000):
-    print(f"Step 2: Finding {k} Nearest Neighbors (Label-Free!)...")
+def find_neighbors_label_free(all_features, k=10, chunk_size=1000, labels=None, subtypes=None):
+    """
+    Find k nearest neighbors with optional restrictions.
+
+    If labels and subtypes are provided, enforces per-image:
+      1. Same class AND same image type (PNG vs JPG)   — preferred
+      2. Same class only                               — fallback if < k candidates
+      3. Unrestricted (except self)                    — fallback if still < k candidates
+    """
+    print(f"Step 2: Finding {k} Nearest Neighbors...")
     N = all_features.shape[0]
     database_features = all_features.to(DEVICE)
     all_indices = []
+
+    labels_dev   = labels.to(DEVICE)   if labels   is not None else None
+    subtypes_dev = subtypes.to(DEVICE) if subtypes is not None else None
+
+    total_fallback_type  = 0  # fell back to same-class-only
+    total_fallback_open  = 0  # fell back to unrestricted
 
     for i in tqdm(range(0, N, chunk_size)):
         end_idx = min(i + chunk_size, N)
@@ -125,13 +139,55 @@ def find_neighbors_label_free(all_features, k=10, chunk_size=1000):
         query_feats = database_features[i:end_idx]
         dists = torch.cdist(query_feats, database_features)
 
-        # MASK SELF-DISTANCE ONLY
         row_indices = torch.arange(current_chunk_size, device=DEVICE)
         col_indices = torch.arange(i, end_idx, device=DEVICE)
-        dists[row_indices, col_indices] = float("inf")
+
+        if labels_dev is not None and subtypes_dev is not None:
+            chunk_labels   = labels_dev[i:end_idx]    # (chunk,)
+            chunk_subtypes = subtypes_dev[i:end_idx]  # (chunk,)
+
+            same_class = chunk_labels.unsqueeze(1)   == labels_dev.unsqueeze(0)    # (chunk, N)
+            same_type  = chunk_subtypes.unsqueeze(1) == subtypes_dev.unsqueeze(0)  # (chunk, N)
+
+            # Level 1: same class + same type, self excluded
+            valid_l1 = same_class & same_type
+            valid_l1[row_indices, col_indices] = False
+
+            # Level 2: same class only, self excluded
+            valid_l2 = same_class.clone()
+            valid_l2[row_indices, col_indices] = False
+
+            # Level 3: all except self
+            valid_l3 = torch.ones(current_chunk_size, N, dtype=torch.bool, device=DEVICE)
+            valid_l3[row_indices, col_indices] = False
+
+            count_l1 = valid_l1.sum(dim=1)  # (chunk,)
+            count_l2 = valid_l2.sum(dim=1)
+
+            # Start with tightest restriction, relax as needed
+            valid = valid_l1.clone()
+
+            fallback_to_l2 = count_l1 < k
+            valid[fallback_to_l2] = valid_l2[fallback_to_l2]
+
+            fallback_to_l3 = fallback_to_l2 & (count_l2 < k)
+            valid[fallback_to_l3] = valid_l3[fallback_to_l3]
+
+            total_fallback_type += fallback_to_l2.sum().item()
+            total_fallback_open += fallback_to_l3.sum().item()
+
+            dists[~valid] = float("inf")
+        else:
+            # Original behaviour: mask self only
+            dists[row_indices, col_indices] = float("inf")
 
         _, indices = torch.topk(dists, k=k, largest=False, dim=1)
         all_indices.append(indices.cpu())
+
+    if labels_dev is not None:
+        print(f"  Neighbour restrictions: {N - total_fallback_type}/{N} used same-class+type, "
+              f"{total_fallback_type - total_fallback_open} fell back to same-class-only, "
+              f"{total_fallback_open} fell back to unrestricted.")
 
     return torch.cat(all_indices, dim=0)
 
@@ -247,6 +303,8 @@ def generate_DINO_embeddings(SPLIT, datasetName, useRetFoundPreprocessing, saved
             img_size=224,
             useRetFoundPreprocessing=useRetFoundPreprocessing,
         )
+        labels_tensor   = None
+        subtypes_tensor = None
     else:
         dataset = MessidorDataset(
             purpose=SPLIT,
@@ -255,6 +313,23 @@ def generate_DINO_embeddings(SPLIT, datasetName, useRetFoundPreprocessing, saved
             img_size=224,
             useRetFoundPreprocessing=useRetFoundPreprocessing,
         )
+        # Build per-image label and type (PNG=0, JPG=1) arrays for restricted neighbour search
+        all_labels, all_subtypes = [], []
+        for img_path in dataset.image_paths:
+            filename = os.path.basename(img_path)
+            if filename in dataset.labels:
+                label = dataset.labels[filename].get("diagnosis", -1)
+            elif os.path.splitext(filename)[0] in dataset.labels:
+                label = dataset.labels[os.path.splitext(filename)[0]].get("diagnosis", -1)
+            else:
+                label = -1
+            all_labels.append(int(label))
+            ext = os.path.splitext(filename)[1].lower()
+            all_subtypes.append(0 if ext == ".png" else 1)  # 0=PNG, 1=JPG
+
+        labels_tensor   = torch.tensor(all_labels)
+        subtypes_tensor = torch.tensor(all_subtypes)
+
     loader = DataLoader(dataset, batch_size=128, shuffle=False, num_workers=4)
 
     encoder = get_retfound_encoder()
@@ -265,7 +340,8 @@ def generate_DINO_embeddings(SPLIT, datasetName, useRetFoundPreprocessing, saved
     )
 
     neighbor_indices = find_neighbors_label_free(
-        all_features, k=K_NEIGHBORS, chunk_size=CHUNK_SIZE
+        all_features, k=K_NEIGHBORS, chunk_size=CHUNK_SIZE,
+        labels=labels_tensor, subtypes=subtypes_tensor,
     )
 
     print(f"Saving {all_features.shape} features and indices...")
@@ -273,8 +349,8 @@ def generate_DINO_embeddings(SPLIT, datasetName, useRetFoundPreprocessing, saved
     # torch.save(all_features, f"{datasetName}_{SPLIT}_features_RETFOUND_dinov2{postFix}.pt")
     # torch.save(neighbor_indices, f"{datasetName}_{SPLIT}_indices_RETFOUND_dinov2{postFix}.pt")
 
-    feat_name = f"features_dinov2{postFix}.pt"
-    idx_name = f"indices_dinov2{postFix}.pt"
+    feat_name = f"features_dinov2{postFix}_type_restricted.pt"
+    idx_name = f"indices_dinov2{postFix}_type_restricted.pt"
 
     torch.save(all_features, os.path.join(savedir, feat_name))
     torch.save(neighbor_indices, os.path.join(savedir, idx_name))
