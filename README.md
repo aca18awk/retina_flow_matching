@@ -1,9 +1,5 @@
 # Few-Shot Flow Matching with Stochastic Barycentric Sampling for Image Synthesis
 
-> **Anonymous Submission for MICCAI 2026**
-> Code repository for the paper: *"Few-Shot Flow Matching with Stochastic
-Barycentric Sampling for Image Synthesis"*
-
 <p align="center">
 <img src="assets/diagram.png" width="700px">
 
@@ -229,14 +225,5 @@ Evaluate visual fidelity and prepare for downstream classification.
 * `Messidor_real_data_for_comparison.py`: Formats and saves real ground-truth data for direct comparison against synthetic outputs.
 
 **Note on Downstream Classifiers:** To maintain strict modularity between the generative pipeline and the clinical evaluation, the downstream ResNet classification framework (including data loaders, training loops, and metrics for Tables 1 & 2) is maintained in a dedicated secondary repository.
-
----
-
-## 📄 Reproducibility & Open Science
-
-This repository is submitted strictly for double-blind peer review. To ensure compliance with MICCAI anonymity guidelines, model checkpoints have been temporarily withheld. Upon acceptance, we will release:
-
-* Pre-trained Phase 1 model weights.
-* The complete secondary classification repository, including all training scripts, validation loops, and downstream evaluation code.
 
 ---
