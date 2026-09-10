@@ -34,6 +34,31 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 ---
 
 ## 🔴🟢🔵 Colored MNIST (CM)
+<!-- ### Qualitative & Quantitative Results -->
+
+| Real Data | Average Sampling, GS=3 | Barycentric Sampling, GS=3 |
+| --- | --- | --- |
+| <img src="assets/grid_41_real_data.png" width="250px"> | <img src="assets/grid_41_same_label_3.png" width="250px"> | <img src="assets/grid_41_same_label_3_barycentric.png" width="250px"> |
+| *Diversity: 0.047* | *Diversity: 0.016* | *Diversity: 0.024* |
+
+ *Figure: Barycentric sampling successfully captures more diversity (e.g., adding/removing dashes, altering thickness) while maintaining structural integrity.*
+
+*(GS = Guidance Scale)*
+
+| Conditioning Strategy | Colour Acc. | Digit Acc. | Fidelity | Diversity |
+| --- | --- | --- | --- | --- |
+| Unconditional (Lower Bound) | 35.40% | 10.00% | 0.141 | 0.144 |
+| Real Data (Upper Bound) | 100.00% | 99.02% | 0.048 | 0.047 |
+| Average (GS=3, Any Label) | 100.00% | 75.96% | 0.029 | 0.019 |
+| Average (GS=1, Same Label) | 100.00% | 91.88% | 0.032 | 0.032 |
+| Average (GS=2, Same Label) | 100.00% | **97.22%** | 0.028 | 0.020 |
+| **Barycentric (GS=2, Same Label)** | 100.00% | 95.60% | **0.030** | **0.027** |
+| Average (GS=3, Same Label) | 100.00% | **98.38%** | 0.026 | 0.016 |
+| **Barycentric (GS=3, Same Label)** | 100.00% | 96.90% | **0.029** | **0.024** |
+| Average (GS=5, Same Label) | 100.00% | 98.94% | 0.026 | 0.012 |
+| Average (GS=7, Same Label) | 100.00% | 98.86% | 0.026 | 0.011 |
+
+---
 
 ### Code Structure & Execution
 
@@ -153,6 +178,47 @@ Output files will be organized with samples and summary grids in their respectiv
 
 <i>Example grid of generated synthetic target domain samples.</i>
 </p>
+
+#### Generating for Different Subsets (Dilation Status, Seed, Shot Count)
+
+For our ablations on MESSIDOR-2, the target domain (Hospital B) can be split three ways, and the generation scripts accept flags to control which split, anchor ordering, and shot count is used.
+
+* **`--experiment`**: which pupil-dilation subset to draw anchors from — `all` (full cohort), `dilated` (imaged with eye drops), or `nondilated`. These splits are created once via `create_messidor2_splits.py`, which writes `messidor2_splits_{all,dilated,nondilated}.json`.
+* **`--seed`**: which of three independent anchor orderings to use — `seed_A`, `seed_B`, or `seed_C` — for sampling reference/anchor images within a subset.
+* **`--N`**: the number of few-shot anchor images to draw (balanced across diagnosis classes G0–G4).
+
+**Step 1 — precompute embeddings and k-NN indices for every subset/seed/N combination (one-off, before generation):**
+
+```bash
+# Embeds the full reference pool for each experiment subset (all/dilated/nondilated)
+python generate_messidor_embeddings.py
+
+# Computes same-class k-NN indices for each (experiment, seed, N) combination.
+# Edit the EXPERIMENTS / SEEDS / N_VALUES lists at the top of the script to control the sweep.
+python compute_reference_knn.py
+```
+
+**Step 2 — generate images for one subset/seed/N combination:**
+
+```bash
+python Eyepacs_generation.py \
+    --experiment all \        # all | dilated | nondilated
+    --seed seed_A \           # seed_A | seed_B | seed_C
+    --N 50 \                  # number of few-shot anchor images
+    --guidance_scale 1.5 \
+    --k_neighbors 2
+```
+
+Results are written to `results_16_June_gen_size_ablation/{experiment}/{seed}/N{N}/GS{guidance_scale}_K{k_neighbors}/`, with per-anchor `samples/`, `summary/` grids, and a `neighbours.csv` log of which neighbours contributed to each cohort. Use `Eyepacs_generation_rebalanced.py` (identical flags) instead if you want each subset oversampled to a fixed total per class, rather than a fixed number of samples per anchor — output is written under `results_10_June_oversampling/`.
+
+**Step 3 — batch-generate across many subsets/seeds/N values (SLURM):**
+
+Edit the `EXPERIMENTS`, `SEEDS`, and `N_VALUES` lists at the top of `submit_generation_jobs.py`, then run:
+
+```bash
+python submit_generation_jobs.py            # submit one job per combination
+python submit_generation_jobs.py --dry-run  # preview the generated job scripts first
+```
 
 ### 5. Evaluation & Downstream Classification
 
