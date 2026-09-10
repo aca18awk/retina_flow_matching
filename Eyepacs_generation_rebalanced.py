@@ -115,11 +115,6 @@ def generate_cohorts(model, val_loader, ref_features, ref_labels, ref_filenames,
             )
 
             if n_samples > 0:
-                # # Equal weights across anchor + neighbours
-                # final_weights = torch.full(
-                #     (n_samples, anchor_feats.shape[0]), 1.0 / anchor_feats.shape[0], device=device
-                # )
-
                 # --- Barycentric Sampling ---
                 # Sample weights from Dirichlet/Exponential
                 raw_weights = (
@@ -186,7 +181,7 @@ if __name__ == "__main__":
 
     # --- Setup Directories ---
     experiment_dir = os.path.join(
-        "results_16_June_gen_size_ablation", args.experiment, args.seed, f"N{args.N}",
+        "results_10_June_oversampling", args.experiment, args.seed, f"N{args.N}",
         f"GS{args.guidance_scale}_K{args.k_neighbors}",
     )
     os.makedirs(experiment_dir, exist_ok=True)
@@ -231,9 +226,20 @@ if __name__ == "__main__":
         dtype=torch.long,
     )
 
-    N_SAMPLES = max(1, 5000 // args.N)
-    n_samples_per_class = {c: N_SAMPLES for c in range(5)}
-    print(f"Samples per anchor: {N_SAMPLES}")
+    GENERATED_IN_TOTAL = 5000
+    # Per-class generation counts: target (1000+N)/5 total per class, distribute across anchors
+    target_per_class = math.ceil((GENERATED_IN_TOTAL + args.N) / 5)
+    class_counts = Counter(ref_labels.tolist())
+    n_samples_per_class = {}
+    for c in range(5):
+        existing = class_counts.get(c, 0)
+        to_generate = max(0, target_per_class - existing)
+        n_samples_per_class[c] = math.ceil(to_generate / existing) if existing > 0 else 0
+
+    print(f"Target per class: {target_per_class}")
+    for c in range(5):
+        existing = class_counts.get(c, 0)
+        print(f"  Class {c}: {existing} existing → {n_samples_per_class[c]} synthetic per anchor")
 
     # Build filename → path index across Messidor2 folder for neighbour image loading
     raw_root = "/vol/biomedic3/awk24/datasets/Messidor2"

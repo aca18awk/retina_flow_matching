@@ -111,6 +111,21 @@ def extract_all_features_domain_specific(loader, encoder, useRetFoundPreprocessi
     return torch.cat(features_list, dim=0)
 
 
+def find_neighbors_cross_set(query_features, ref_features, k=10, chunk_size=1000):
+    """KNN from query set into a separate reference set (no self-distance masking)."""
+    print(f"Finding {k} nearest neighbours in reference set of size {ref_features.shape[0]}...")
+    ref = ref_features.to(DEVICE)
+    all_indices = []
+
+    for i in tqdm(range(0, query_features.shape[0], chunk_size)):
+        query_chunk = query_features[i : i + chunk_size].to(DEVICE)
+        dists = torch.cdist(query_chunk, ref)
+        _, indices = torch.topk(dists, k=k, largest=False, dim=1)
+        all_indices.append(indices.cpu())
+
+    return torch.cat(all_indices, dim=0)
+
+
 def find_neighbors_label_free(all_features, k=10, chunk_size=1000):
     print(f"Step 2: Finding {k} Nearest Neighbors (Label-Free!)...")
     N = all_features.shape[0]
@@ -239,43 +254,49 @@ def compare_with_original_retfoud():
     print("=" * 50 + "\n")
 
 
-def generate_DINO_embeddings(SPLIT, datasetName, useRetFoundPreprocessing, savedir=""):
-    if datasetName == "EYEPACS":
-        dataset = EyepacsDataset(
-            purpose=SPLIT,
-            img_size=224,
-            useRetFoundPreprocessing=useRetFoundPreprocessing,
-        )
-    else:
-        dataset = MessidorDataset(
-            purpose=SPLIT,
-            root_dir="/vol/biomedic3/awk24/datasets/Messidor2_256",
-            csv_path="/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv",
-            img_size=224,
-            useRetFoundPreprocessing=useRetFoundPreprocessing,
-        )
-    loader = DataLoader(dataset, batch_size=128, shuffle=False, num_workers=4)
+def generate_DINO_embeddings(
+    purpose,
+    experiment="all",
+    seed="seed_A",
+    useRetFoundPreprocessing=False,
+    savedir="",
+):
+    """Extract and save DINOv2 features + filenames for a Messidor split.
 
-    encoder = get_retfound_encoder()
-    all_features = extract_all_features_domain_specific(
-        loader,
-        encoder,
+    Does NOT compute KNN — call find_neighbors_cross_set separately so KNN
+    can be recomputed cheaply for different N values without re-running the
+    expensive forward pass.
+    """
+    import json
+
+    dataset = MessidorDataset(
+        purpose=purpose,
+        experiment=experiment,
+        seed=seed,
+        N=None,
+        root_dir="/vol/biomedic3/awk24/datasets/Messidor2",
+        json_dir="/vol/biomedic3/awk24/datasets/Messidor2",
+        csv_path="/vol/biomedic3/awk24/datasets/Messidor2/messidor_data.csv",
+        img_size=224,
         useRetFoundPreprocessing=useRetFoundPreprocessing,
     )
 
-    neighbor_indices = find_neighbors_label_free(
-        all_features, k=K_NEIGHBORS, chunk_size=CHUNK_SIZE
+    filenames = [os.path.basename(p) for p in dataset.image_paths]
+    loader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=4)
+
+    encoder = get_retfound_encoder()
+    all_features = extract_all_features_domain_specific(
+        loader, encoder, useRetFoundPreprocessing=useRetFoundPreprocessing
     )
 
-    print(f"Saving {all_features.shape} features and indices...")
-    postFix = "_RetFoundPreprocessing" if useRetFoundPreprocessing else ""
+    os.makedirs(savedir, exist_ok=True)
+    postfix = "_RetFoundPreprocessing" if useRetFoundPreprocessing else ""
+    torch.save(all_features, os.path.join(savedir, f"features_dinov2{postfix}.pt"))
+    with open(os.path.join(savedir, f"filenames_dinov2{postfix}.json"), "w") as f:
+        json.dump(filenames, f)
 
-    feat_name = f"features_dinov2{postFix}.pt"
-    idx_name = f"indices_dinov2{postFix}.pt"
-
-    torch.save(all_features, os.path.join(savedir, feat_name))
-    torch.save(neighbor_indices, os.path.join(savedir, idx_name))
-    print("Done!")
+    print(f"Saved {all_features.shape} features + {len(filenames)} filenames to {savedir}")
+    return all_features, filenames
 
 
 if __name__ == "__main__":
